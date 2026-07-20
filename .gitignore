@@ -1,0 +1,15 @@
+bin/
+obj/
+*.user
+
+.vs/
+
+# Kokoro downloads its 310MB model into the working directory on first run.
+kokoro.onnx
+
+# Pre-extracted show audio + captions for voice cloning (~338MB).
+# Private home use only - never distribute audio impersonating the real voice actors.
+scratchpad/
+md_audio/
+*.wav
+*.srt

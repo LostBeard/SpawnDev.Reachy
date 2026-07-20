@@ -1,0 +1,23 @@
+# Rose / Serial Designation N - enabled tools
+
+# Expression. N is physical and reactive - these carry most of the personality.
+play_emotion
+stop_emotion
+dance
+stop_dance
+
+# Looking at people. head_tracking keeps her gaze locked on Aubs while talking,
+# which is the single biggest "she is alive" cue.
+head_tracking
+move_head
+
+# Custom - see turn_body.py. The stock tool set has NO torso rotation, which is
+# why the character truthfully reports it cannot turn to face you.
+turn_body
+
+# Camera left off deliberately: it makes the model narrate what it sees, which
+# derails roleplay. Enable it later if Aubs wants "what am I holding" games.
+# camera
+
+# do_nothing left off: it gives the model an easy out, and N is never passive.
+# do_nothing
