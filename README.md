@@ -18,26 +18,49 @@ robot never sends audio anywhere except to the PC on your LAN.
 
 ## What works
 
+- **You can talk to her.** Microphone to speech recognition to language model to speech
+  synthesis to the robot's speaker, closed loop, roughly a second from the end of your
+  sentence to the start of hers.
+- **Seven characters**, switchable out loud - "can you be Uzi?" - each with its own voice
+  and personality.
 - **Full REST surface** - motors, head pose, body yaw, volume, sounds, face tracking, DOA.
 - **Live microphone over WebRTC** - the robot's 4-mic array, decoded from Opus to 16 kHz
-  mono PCM, ready for VAD and speech recognition. The array has hardware echo cancellation
-  in its XVF3800, so the robot does not transcribe its own speech.
-- **Speech out** - Kokoro TTS with per-character voices, uploaded and played on the robot.
+  mono PCM. The array has hardware echo cancellation in its XVF3800, so the robot does not
+  transcribe its own speech.
 - **Body-follows-face tracking** - the torso turns to follow you, not just the head.
 
 ## Quick start
 
+Needs [Ollama](https://ollama.com) running with `llama3.1:8b` pulled.
+
 ```bash
+# One-time: fetch the speech models (~250MB, not in git)
+dotnet run tools/fetch_models.cs
+
 # Read-only connectivity dump - verifies the SDK can see your robot
 dotnet run --project SpawnDev.Reachy.Rose -- 192.168.1.170
 
-# Listen on the robot's microphone with a live level meter
-dotnet run --project SpawnDev.Reachy.Rose -- --test-mic
+# Talk to her
+dotnet run --project SpawnDev.Reachy.Rose -- --talk
 ```
 
-Test modes: `--test-characters --test-voice --test-loudness --test-posture
---test-signalling --test-mic --test-udp`. Add `--verbose` for link logs and `--sipdebug`
-for SIPSorcery internals.
+### Test modes
+
+Run these instead of asking a child to find your bugs for you.
+
+| mode | does |
+|---|---|
+| `--talk` | the live conversation loop |
+| `--test-loop` | the whole chain end to end with a synthesised question standing in for a person |
+| `--test-ears <file.wav>` | VAD + transcription on a file, no robot needed |
+| `--test-brain` | the language model alone, with latency per reply |
+| `--test-names` | what recognition ACTUALLY returns for each character name |
+| `--test-speech` | sentence splitting, action stripping, switch-intent gating |
+| `--test-mic` | audio link with a live level meter |
+| `--test-voice` / `--test-loudness` / `--test-posture` | speech output, compression A/B, head position A/B |
+| `--test-characters` / `--test-signalling` / `--test-udp` | name resolution, WebRTC signalling, inbound UDP |
+
+Add `--verbose` for link logs and `--sipdebug` for SIPSorcery internals.
 
 ## Things learned the hard way
 
@@ -68,6 +91,24 @@ the XVF3800 has no speaker output gain at all. There is no ceiling left to raise
 the floor instead: Kokoro's output peaks at 0 dBFS but averages -18.4 dBFS, and
 peak-normalising plus 3:1 compression above -12 dB buys a measured **+4.1 dB RMS** with the
 peak unchanged. Measure RMS, not peak, before concluding you need a bigger speaker.
+
+**Speech recognition does not know these names, and the failures are systematic.**
+Whisper renders "Uzi" as "using", "Khan" as "gone", "Thad" as "sad" and "Doll" as "dull" -
+consistently, across every voice tested. Measured rather than guessed, that took character
+switching from 10/21 to 21/21. Since several of those are ordinary English words, they are
+only matched in the slot immediately after a switch cue, so "I want an ice cream" does not
+turn the robot into a different character. `--test-names` re-measures it.
+
+**`play_sound` only queues.** It returns as soon as playback is accepted, not when it
+finishes, so starting the next clip cuts the previous one off. A reply synthesised sentence
+by sentence will interrupt itself a word or two into every line unless playback is
+explicitly serialized. Synthesis of the next line can still overlap the current one - that
+is what keeps it gapless.
+
+**Roleplay models narrate their actions inline**, in asterisks: `*antennas twitch* Wait,
+really?!`. That must never reach the synthesiser, which reads the punctuation out loud.
+Worth splitting rather than deleting - the robot really does have a head, antennas and a
+rotating torso, so the stage direction is a movement cue.
 
 **Do not build turn-to-voice on DOA.** `GET /api/state/doa` parks at ~90 degrees as an idle
 default and returned 90 degrees for both "front" and "left" with an air conditioner in the
