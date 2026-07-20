@@ -33,6 +33,18 @@ public sealed class RoseConversation : IAsyncDisposable
     /// <summary>The character Rose is currently playing.</summary>
     public Character Character => _character;
 
+    /// <summary>
+    /// Follow Aubs's face with the head while listening.
+    /// </summary>
+    /// <remarks>
+    /// The daemon's tracker drives the head continuously, which fights every gesture
+    /// that commands a head pose - both write the same joints and the result is
+    /// jitter. Rather than choose one, they take turns: she WATCHES while listening
+    /// and PERFORMS while speaking, which is also what a person does. Tracking is
+    /// switched off for the duration of a reply and back on afterwards.
+    /// </remarks>
+    public bool WatchWhileListening { get; set; } = true;
+
     private readonly bool _useMicrophone;
 
     /// <param name="useMicrophone">
@@ -99,6 +111,8 @@ public sealed class RoseConversation : IAsyncDisposable
         await SpeakGatedAsync(hello, ct);
 
         try { await warm; } catch (Exception ex) { Log?.Invoke($"warmup failed: {ex.Message}"); }
+
+        await SetWatchingAsync(true, ct);
     }
 
     private async Task HandleUtteranceAsync(string text)
@@ -111,6 +125,10 @@ public sealed class RoseConversation : IAsyncDisposable
         try
         {
             OnLine?.Invoke("Aubs", text);
+
+            // Take the head back from the tracker for the whole reply, so gestures
+            // and the tracker are never driving the same joints at once.
+            await SetWatchingAsync(false, _cts.Token);
 
             if (TrySwitchCharacter(text, out var switched))
             {
@@ -182,7 +200,27 @@ public sealed class RoseConversation : IAsyncDisposable
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { Log?.Invoke($"turn failed: {ex.GetType().Name}: {ex.Message}"); }
-        finally { _turn.Release(); }
+        finally
+        {
+            // Back to watching however the turn ended, including a character switch
+            // or a failure - otherwise she goes blind for the rest of the session.
+            try { await SetWatchingAsync(true, CancellationToken.None); } catch { }
+            _turn.Release();
+        }
+    }
+
+    /// <summary>
+    /// Hands the head to the daemon's face tracker, or takes it back for gestures.
+    /// </summary>
+    private async Task SetWatchingAsync(bool watching, CancellationToken ct)
+    {
+        if (!WatchWhileListening) return;
+        try
+        {
+            await _robot.SetFaceTrackingAsync(watching, ct);
+            Log?.Invoke(watching ? "watching (tracker has the head)" : "performing (gestures have the head)");
+        }
+        catch (Exception ex) { Log?.Invoke($"tracking toggle failed: {ex.Message}"); }
     }
 
     private async Task SpeakGatedAsync(string text, CancellationToken ct)
@@ -272,6 +310,7 @@ public sealed class RoseConversation : IAsyncDisposable
         // them into thermal protection, and Rose is left switched on for hours.
         try
         {
+            await SetWatchingAsync(false, CancellationToken.None);
             await _body.SettleAsync(_character);
             await _robot.SetMotorModeAsync(MotorMode.Disabled);
         }
