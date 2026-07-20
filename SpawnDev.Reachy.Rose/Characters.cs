@@ -9,13 +9,26 @@ namespace SpawnDev.Reachy.Rose;
 /// <param name="Persona">Injected as the system prompt when this character is active.</param>
 /// <param name="AntennaRest">Resting antenna angles (radians), a big part of read-at-a-glance mood.</param>
 /// <param name="MotionScale">Multiplier on gesture size. Bigger = more animated.</param>
+/// <param name="Mishearings">
+/// What speech recognition actually returns for this name, measured rather than guessed.
+/// </param>
+/// <remarks>
+/// Mishearings are matched ONLY immediately after a switch cue ("can you be ___"),
+/// never anywhere in a sentence. Several of them are ordinary English words - "an",
+/// "gone", "dull" - and matching those freely would turn "I want an ice cream" into
+/// a character switch.
+/// </remarks>
 public record Character(
     string Name,
     string[] Aliases,
     string Voice,
     string Persona,
     (double Left, double Right) AntennaRest,
-    double MotionScale);
+    double MotionScale,
+    string[]? Mishearings = null)
+{
+    public string[] Mishearings { get; init; } = Mishearings ?? [];
+}
 
 /// <summary>
 /// The Murder Drones cast, tuned for a ten year old.
@@ -66,7 +79,8 @@ public static class CharacterLibrary
         You say things like "Oh gosh!" and "Wait, really?!" and "That's actually SO
         cool." You are not cool and not trying to be, and that is your charm.
         """ + SharedRules,
-        AntennaRest: (0.25, 0.25), MotionScale: 1.2);
+        AntennaRest: (0.25, 0.25), MotionScale: 1.2,
+        Mishearings: ["an", "en", "in", "and", "hen", "him"]);
 
     public static readonly Character Uzi = new(
         "Uzi", ["uzi doorman"],
@@ -79,7 +93,8 @@ public static class CharacterLibrary
         complimented. You say "ugh", "whatever", "okay but ACTUALLY that's kind of
         cool". Never mean to Aubs - your sarcasm is aimed at situations, not her.
         """ + SharedRules,
-        AntennaRest: (-0.15, -0.15), MotionScale: 0.8);
+        AntennaRest: (-0.15, -0.15), MotionScale: 0.8,
+        Mishearings: ["using", "oozy", "ozzy", "ozzie", "uzzi", "woozy", "easy"]);
 
     public static readonly Character V = new(
         "V", ["vee", "serial designation v"],
@@ -91,7 +106,8 @@ public static class CharacterLibrary
         posture and swagger and then get distracted by something shiny. You are all
         bark. You find snacks and naps deeply important.
         """ + SharedRules,
-        AntennaRest: (0.4, -0.1), MotionScale: 1.4);
+        AntennaRest: (0.4, -0.1), MotionScale: 1.4,
+        Mishearings: ["there", "we", "be", "vee", "victor"]);
 
     public static readonly Character J = new(
         "J", ["jay", "serial designation j"],
@@ -103,7 +119,8 @@ public static class CharacterLibrary
         annoyed by inefficiency. You give performance feedback nobody asked for.
         Underneath it you are trying very hard and it is a little endearing.
         """ + SharedRules,
-        AntennaRest: (0.5, 0.5), MotionScale: 0.7);
+        AntennaRest: (0.5, 0.5), MotionScale: 0.7,
+        Mishearings: ["jay", "j.", "jane", "jah"]);
 
     public static readonly Character Doll = new(
         "Doll", ["dollie"],
@@ -115,7 +132,8 @@ public static class CharacterLibrary
         up to someone it lands hard, because it is clearly rare. Mysterious, never
         frightening.
         """ + SharedRules,
-        AntennaRest: (-0.3, -0.3), MotionScale: 0.5);
+        AntennaRest: (-0.3, -0.3), MotionScale: 0.5,
+        Mishearings: ["dull", "doll", "dol", "tall"]);
 
     public static readonly Character Khan = new(
         "Khan", ["khan doorman", "uzi's dad"],
@@ -126,7 +144,8 @@ public static class CharacterLibrary
         say. You are enthusiastic about deeply boring things, especially doors. You
         make dad jokes. You are trying your best and it shows.
         """ + SharedRules,
-        AntennaRest: (0.1, 0.1), MotionScale: 0.9);
+        AntennaRest: (0.1, 0.1), MotionScale: 0.9,
+        Mishearings: ["gone", "con", "kahn", "conn", "khan"]);
 
     public static readonly Character Thad = new(
         "Thad", ["thaddeus"],
@@ -137,7 +156,11 @@ public static class CharacterLibrary
         you are easily impressed, and you have a lot of enthusiasm for whatever is
         happening right now.
         """ + SharedRules,
-        AntennaRest: (0.3, 0.3), MotionScale: 1.1);
+        AntennaRest: (0.3, 0.3), MotionScale: 1.1,
+        // "sad" is a deliberate trade-off: it collides with asking a character to
+        // ACT sad. In a Murder Drones roleplay "can you be Thad" is by far the more
+        // likely sentence, and without it Thad is unreachable by voice entirely.
+        Mishearings: ["sad", "chad", "thad", "tad"]);
 
     public static readonly IReadOnlyList<Character> All = [N, Uzi, V, J, Doll, Khan, Thad];
 

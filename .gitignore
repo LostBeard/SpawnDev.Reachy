@@ -13,3 +13,6 @@ scratchpad/
 md_audio/
 *.wav
 *.srt
+
+# ASR + VAD models, fetched separately (~250MB)
+models/

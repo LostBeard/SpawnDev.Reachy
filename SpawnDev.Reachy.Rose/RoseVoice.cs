@@ -101,48 +101,129 @@ public sealed class RoseVoice : IDisposable
     /// </summary>
     public const double MaxHeadLift = 0.0224;
 
-    /// <summary>Synthesises <paramref name="text"/> in the character's voice and plays it on Rose.</summary>
-    public async Task SpeakAsync(string text, Character character, CancellationToken ct = default)
+    /// <summary>
+    /// A line that has been synthesised and uploaded, ready to play on demand.
+    /// </summary>
+    /// <param name="SoundName">Name the clip was uploaded under.</param>
+    /// <param name="Duration">How long it runs for.</param>
+    public readonly record struct PreparedSpeech(string SoundName, TimeSpan Duration)
     {
-        if (string.IsNullOrWhiteSpace(text)) return;
+        public bool IsEmpty => string.IsNullOrEmpty(SoundName);
+    }
 
-        // SynthesizeAsync returns RAW 16-bit PCM with no container - the RIFF
-        // header is added by SaveAudioToFile. Uploading these bytes directly gets
-        // "Unsupported or invalid audio file" from the daemon, which validates
-        // uploads by content.
-        // Start the head moving BEFORE synthesis rather than after: the lift and
-        // the TTS run concurrently, so the posture is already correct by the time
-        // there is audio to play and costs no added latency.
-        var lift = LiftHeadToSpeak
-            ? _rose.GotoAsync(
-                headPose: new XyzRpyPose(Z: MaxHeadLift, Pitch: -0.05),
-                duration: 0.4, interpolation: Interpolation.EaseInOut, ct: ct)
-            : Task.FromResult<MoveHandle?>(null);
+    /// <summary>
+    /// Synthesises and uploads a line WITHOUT playing it.
+    /// </summary>
+    /// <remarks>
+    /// Separated from playback so a caller can render the next sentence while the
+    /// current one is still being spoken. Playing is near-instant once prepared, so
+    /// this is what keeps multi-sentence replies gapless without overlapping them.
+    /// </remarks>
+    public async Task<PreparedSpeech> PrepareAsync(string text, Character character, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return default;
 
         var pcm = await _synth.SynthesizeAsync(text, GetVoice(character.Voice));
         if (NormalizeLoudness) Loudify(pcm);
-        try { await lift; } catch { /* posture is an enhancement, never block speech on it */ }
 
-        // Round-trip through their writer rather than hand-rolling a header, so
-        // the sample rate and fmt chunk always match what the model produced.
         var temp = Path.Combine(Path.GetTempPath(), $"rose_{Guid.NewGuid():N}.wav");
         try
         {
             _synth.SaveAudioToFile(pcm, temp);
             var wav = await File.ReadAllBytesAsync(temp, ct);
 
-            // Unique name per utterance so a play cannot race an overwrite of the
-            // previous one.
             var name = Path.GetFileName(temp);
-            using (var ms = new MemoryStream(wav))
-                await _rose.UploadSoundAsync(name, ms, ct);
+            using var ms = new MemoryStream(wav);
+            await _rose.UploadSoundAsync(name, ms, ct);
 
-            await _rose.PlaySoundAsync(name, ct);
+            return new PreparedSpeech(name, WavDuration(wav));
         }
         finally
         {
             if (File.Exists(temp)) File.Delete(temp);
         }
+    }
+
+    /// <summary>
+    /// Plays a prepared line and waits for it to finish.
+    /// </summary>
+    /// <remarks>
+    /// The wait is the whole point. The daemon's play_sound returns as soon as
+    /// playback is QUEUED, and starting another clip while one is still going cuts
+    /// the first one off - which sounds like Rose interrupting herself a word or two
+    /// into every sentence. Callers must let this complete before playing the next.
+    /// </remarks>
+    public async Task PlayAsync(PreparedSpeech speech, CancellationToken ct = default)
+    {
+        if (speech.IsEmpty) return;
+
+        await LiftHeadAsync(ct);
+        await _rose.PlaySoundAsync(speech.SoundName, ct);
+
+        // A small tail beyond the sample length: the daemon starts playback slightly
+        // after the call returns, and running the next line in on the final syllable
+        // is exactly the artefact this is here to prevent.
+        await Task.Delay(speech.Duration + TimeSpan.FromMilliseconds(250), ct);
+    }
+
+    private async Task LiftHeadAsync(CancellationToken ct)
+    {
+        if (!LiftHeadToSpeak) return;
+        try
+        {
+            await _rose.GotoAsync(
+                headPose: new XyzRpyPose(Z: MaxHeadLift, Pitch: -0.05),
+                duration: 0.4, interpolation: Interpolation.EaseInOut, ct: ct);
+        }
+        catch { /* posture is an enhancement, never block speech on it */ }
+    }
+
+    /// <summary>
+    /// Synthesises <paramref name="text"/> in the character's voice, plays it on Rose,
+    /// and waits for playback to finish. Returns how long the audio ran for.
+    /// </summary>
+    public async Task<TimeSpan> SpeakAsync(string text, Character character, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return TimeSpan.Zero;
+
+        var prepared = await PrepareAsync(text, character, ct);
+        await PlayAsync(prepared, ct);
+        return prepared.Duration;
+    }
+
+    /// <summary>
+    /// Playback duration of a RIFF/WAVE buffer, read from its own header.
+    /// </summary>
+    /// <remarks>
+    /// Read rather than assumed, so it stays correct if the synthesiser's sample
+    /// rate ever changes. Falls back to a length-based estimate at 24kHz mono - the
+    /// Kokoro-82M output rate - if the header is not what we expect.
+    /// </remarks>
+    private static TimeSpan WavDuration(byte[] wav)
+    {
+        try
+        {
+            if (wav.Length >= 44 && wav[0] == 'R' && wav[1] == 'I' && wav[2] == 'F' && wav[3] == 'F')
+            {
+                var byteRate = BitConverter.ToInt32(wav, 28);
+
+                // Walk the chunk list rather than assuming data starts at 44 - a
+                // LIST/INFO chunk before it is legal and would skew the estimate.
+                var pos = 12;
+                while (pos + 8 <= wav.Length)
+                {
+                    var id = System.Text.Encoding.ASCII.GetString(wav, pos, 4);
+                    var size = BitConverter.ToInt32(wav, pos + 4);
+                    if (id == "data" && byteRate > 0)
+                        return TimeSpan.FromSeconds(Math.Min(size, wav.Length - pos - 8) / (double)byteRate);
+                    if (size <= 0) break;
+                    pos += 8 + size + (size % 2);
+                }
+            }
+        }
+        catch { /* fall through to the estimate */ }
+
+        return TimeSpan.FromSeconds(Math.Max(wav.Length - 44, 0) / 2.0 / 24000.0);
     }
 
     /// <summary>
