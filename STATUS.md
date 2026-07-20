@@ -1,6 +1,34 @@
 # Rose - status and next steps
 
-**EOD 2026-07-19.** Solution builds clean. Nothing half-written. Not yet committed to git.
+**2026-07-20.** Solution builds clean. Pushed: https://github.com/LostBeard/SpawnDev.Reachy
+
+## She listens and answers
+
+`dotnet run --project SpawnDev.Reachy.Rose -- --talk`
+
+Microphone -> Silero VAD -> Whisper base.en -> llama3.1:8b -> Kokoro -> the robot's own
+speaker. About a second from the end of a question to the start of the answer.
+
+Three defects were found by testing and fixed, each of which Aubs would have hit in her
+first minute:
+
+- **Rose interrupted herself** a word or two into every sentence. `play_sound` only queues
+  and returns, so each streamed sentence cut off the one before it. Synthesis and playback
+  are now separate: the next line renders while the current one plays, but playback is
+  strictly serialized. Play start/end is logged so overlap is checkable from data.
+- **Character switching failed more often than it worked.** Whisper hears the names as
+  ordinary words - "using", "gone", "sad", "dull", "an". Measuring that across three voices
+  took it from 10/21 to 21/21. Since several are real English words they only match right
+  after a switch cue, so "I want an ice cream" is not a request to become N.
+- **An ellipsis split sentences**, turning "It's so... sparkly!" into two clips with a gap.
+  These characters use "..." constantly.
+
+The model is loaded during connect (first reply 6.4s -> 1.0s) and released on exit
+(VRAM 6299 -> 1100 MiB, verified) rather than idling out on TJ's workstation GPU.
+
+**Not yet verified: a real conversation with a real child's voice.** Everything above was
+tested with synthesised speech. Aubs's voice will be misheard differently - re-run
+`--test-names` with her and extend each character's `Mishearings` from what it reports.
 
 Rose = Aubs's Reachy Mini Wireless (she named it; originally "Vertex").
 Goal: local-only Murder Drones roleplay, favourite character **Serial Designation N**.
