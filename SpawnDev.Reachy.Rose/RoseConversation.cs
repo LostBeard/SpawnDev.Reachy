@@ -15,6 +15,7 @@ public sealed class RoseConversation : IAsyncDisposable
     private readonly RoseEars _ears;
     private readonly RoseBrain _brain;
     private readonly RoseVoice _voice;
+    private readonly RoseBody _body;
 
     /// <summary>Serialises replies so two utterances can never talk over each other.</summary>
     private readonly SemaphoreSlim _turn = new(1, 1);
@@ -51,6 +52,7 @@ public sealed class RoseConversation : IAsyncDisposable
         _ears = new RoseEars(modelDir);
         _brain = new RoseBrain(ollamaModel);
         _voice = new RoseVoice(_robot);
+        _body = new RoseBody(_robot);
         _useMicrophone = useMicrophone;
     }
 
@@ -76,6 +78,7 @@ public sealed class RoseConversation : IAsyncDisposable
 
         _ears.Log += m => Log?.Invoke(m);
         _link.Log += m => Log?.Invoke(m);
+        _body.Log += m => Log?.Invoke(m);
         _ears.OnUtterance += text => _ = HandleUtteranceAsync(text);
 
         // Motors must be live before she can lift her head to speak.
@@ -113,6 +116,11 @@ public sealed class RoseConversation : IAsyncDisposable
             {
                 _character = switched;
                 _brain.Forget();
+
+                // Settle into the new character's resting antenna posture, which is
+                // a large part of reading who she is at a glance.
+                _ = _body.SettleAsync(switched, _cts.Token);
+
                 var line = SwitchGreeting(switched);
                 OnLine?.Invoke(switched.Name, line);
                 await SpeakGatedAsync(line, _cts.Token);
@@ -136,10 +144,17 @@ public sealed class RoseConversation : IAsyncDisposable
                 await _brain.StreamReplyAsync(text, _character, async sentence =>
                 {
                     var (say, actions) = SpokenText.Split(sentence);
-                    foreach (var a in actions) Log?.Invoke($"action: {a}");
+
+                    // Movement runs alongside the speech rather than before it. The
+                    // model writes the action first ("*tilts head* Hmm...") and a
+                    // character who finishes moving before starting to talk reads as
+                    // a machine running a script.
+                    foreach (var a in actions)
+                        _ = _body.PerformAsync(a, _character, _cts.Token);
 
                     // A sentence that was nothing but a stage direction has no
-                    // speech left in it - skip it rather than synthesise silence.
+                    // speech left in it - skip the audio, but the gesture above
+                    // still plays.
                     if (!SpokenText.IsSayable(say)) return;
 
                     var prepared = await _voice.PrepareAsync(say, _character, _cts.Token);
@@ -252,6 +267,15 @@ public sealed class RoseConversation : IAsyncDisposable
     {
         // Hand the VRAM back before tearing down, while the token is still live.
         await _brain.ReleaseAsync();
+
+        // Park her tidily and drop the motors. Holding a pose under load can put
+        // them into thermal protection, and Rose is left switched on for hours.
+        try
+        {
+            await _body.SettleAsync(_character);
+            await _robot.SetMotorModeAsync(MotorMode.Disabled);
+        }
+        catch { /* shutting down anyway */ }
 
         _cts.Cancel();
         await _ears.DisposeAsync();

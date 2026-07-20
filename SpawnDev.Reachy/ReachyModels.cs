@@ -130,5 +130,6 @@ internal record PlaySoundRequest([property: JsonPropertyName("file")] string Fil
 [JsonSerializable(typeof(XyzRpyPoseDto))]
 [JsonSerializable(typeof(double))]
 [JsonSerializable(typeof(List<string>))]
+[JsonSerializable(typeof(List<double>))]
 [JsonSerializable(typeof(Dictionary<string, List<string>>))]
 internal partial class ReachyJson : JsonSerializerContext;

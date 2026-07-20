@@ -46,6 +46,150 @@ if (args.Contains("--talk"))
     return 0;
 }
 
+if (args.Contains("--test-body"))
+{
+    // Plays every gesture using REAL stage directions captured from the model
+    // during --test-loop runs, so this tests the actual text that arrives rather
+    // than phrasing invented to match the classifier.
+    var bodyIp = args.FirstOrDefault(a => a.Contains('.')) ?? "192.168.1.170";
+    using var br = new ReachyMiniClient(bodyIp);
+    await br.SetMotorModeAsync(MotorMode.Enabled);
+
+    var body = new RoseBody(br);
+    body.Log += m => Console.WriteLine($"  [log] {m}");
+
+    string[] realActions =
+    [
+        "I turn my head to face Aubriella, my eyes lighting up with excitement",
+        "Antennas twitch excitedly as the torso rotates slightly, leaning forward",
+        "I bob my torso up and down enthusiastically, my antennas wiggling back and forth",
+        "I tilt my head to one side, thinking for a moment",
+        "I spin around in a circle, my torso rotating rapidly as I get more excited",
+        "Drone's head tilts to one side, concern etched on its face",
+        "My antennas droop sadly",
+        "I look up in surprise",
+        "nods enthusiastically",
+        "shakes her head",
+    ];
+
+    foreach (var a in realActions)
+    {
+        Console.WriteLine($"\n  \"{a}\"");
+        await body.PerformAsync(a, CharacterLibrary.N);
+        await Task.Delay(400);
+    }
+
+    // Doll barely moves and V swaggers - the same direction should read differently.
+    Console.WriteLine("\n  same action, different characters (MotionScale):");
+    foreach (var c in new[] { CharacterLibrary.Doll, CharacterLibrary.V })
+    {
+        Console.WriteLine($"    {c.Name} (scale {c.MotionScale})");
+        await body.PerformAsync("antennas wiggle excitedly", c);
+        await Task.Delay(400);
+    }
+
+    await body.SettleAsync(CharacterLibrary.N);
+    await Task.Delay(1000);
+    await br.SetMotorModeAsync(MotorMode.Disabled);
+    Console.WriteLine("\nDone, motors disabled.");
+    return 0;
+}
+
+if (args.Contains("--probe-limits"))
+{
+    // Finds the REAL travel limits by commanding past them and reading back what
+    // the robot actually did. The daemon clamps silently - an out-of-range goto
+    // returns success and simply does not go there - so the only way to know the
+    // envelope is to measure it. Gesture code that assumes a range it never
+    // verified either does nothing or grinds against a hard stop.
+    var probeIp = args.FirstOrDefault(a => a.Contains('.')) ?? "192.168.1.170";
+    using var pr = new ReachyMiniClient(probeIp);
+    await pr.SetMotorModeAsync(MotorMode.Enabled);
+    await Task.Delay(500);
+
+    async Task<string> Sweep(
+        string label,
+        double[] targets,
+        Func<double, Task> command,
+        Func<Task<double?>> read)
+    {
+        Console.WriteLine($"\n  {label}");
+        double? lastAchieved = null;
+        double reachedMax = 0;
+
+        foreach (var t in targets)
+        {
+            await command(t);
+            await Task.Delay(900);
+            var got = await read();
+            if (got is null) { Console.WriteLine($"    {t,7:F3} -> (no readback)"); continue; }
+
+            // Purely RELATIVE. An earlier version allowed an absolute 0.05 slack,
+            // which is meaningless on a metre-scale axis: it reported the head lift
+            // as reaching 0.040 when it visibly clamps at 0.022, a limit already
+            // known from a previous session. An instrument that cannot detect a
+            // clamp you already know about will invent an envelope that does not
+            // exist.
+            var tracking = Math.Abs(got.Value) >= Math.Abs(t) * 0.85;
+            if (tracking && Math.Abs(t) > Math.Abs(reachedMax)) reachedMax = t;
+            Console.WriteLine($"    cmd {t,7:F3} -> got {got.Value,7:F3}   " +
+                              $"{(tracking ? "" : $"CLAMPED (reached {got.Value / t:P0})")}");
+            lastAchieved = got;
+        }
+        _ = lastAchieved;
+        return $"{label}: usable to about {reachedMax:F3}";
+    }
+
+    var findings = new List<string>();
+    var neutral = new XyzRpyPose();
+
+    findings.Add(await Sweep("head yaw + (rad)", [0.4, 0.8, 1.2, 1.6],
+        v => pr.GotoAsync(headPose: new XyzRpyPose(Yaw: v), duration: 0.6),
+        async () => (await pr.GetHeadPoseAsync())?.Yaw));
+    await pr.GotoAsync(headPose: neutral, duration: 0.6);
+
+    // Up and down are not necessarily symmetric, and "looks down" is the single
+    // most useful sad/shy gesture there is.
+    findings.Add(await Sweep("head pitch + down (rad)", [0.2, 0.4, 0.6, 0.8],
+        v => pr.GotoAsync(headPose: new XyzRpyPose(Pitch: v), duration: 0.6),
+        async () => (await pr.GetHeadPoseAsync())?.Pitch));
+    await pr.GotoAsync(headPose: neutral, duration: 0.6);
+
+    findings.Add(await Sweep("head pitch - up (rad)", [-0.2, -0.4, -0.6, -0.8],
+        v => pr.GotoAsync(headPose: new XyzRpyPose(Pitch: v), duration: 0.6),
+        async () => (await pr.GetHeadPoseAsync())?.Pitch));
+    await pr.GotoAsync(headPose: neutral, duration: 0.6);
+
+    findings.Add(await Sweep("head roll (rad)", [0.3, 0.6, 0.9, 1.2],
+        v => pr.GotoAsync(headPose: new XyzRpyPose(Roll: v), duration: 0.6),
+        async () => (await pr.GetHeadPoseAsync())?.Roll));
+    await pr.GotoAsync(headPose: neutral, duration: 0.6);
+
+    findings.Add(await Sweep("head z lift (m)", [0.010, 0.018, 0.022, 0.030],
+        v => pr.GotoAsync(headPose: new XyzRpyPose(Z: v), duration: 0.6),
+        async () => (await pr.GetHeadPoseAsync())?.Z));
+    await pr.GotoAsync(headPose: neutral, duration: 0.6);
+
+    findings.Add(await Sweep("antenna left (rad)", [1.0, 2.0, 3.0, 4.0],
+        v => pr.GotoAsync(antennas: (v, 0), duration: 0.6),
+        async () => (await pr.GetAntennaPositionsAsync())?.Left));
+    await pr.GotoAsync(antennas: (0, 0), duration: 0.6);
+
+    findings.Add(await Sweep("body yaw (rad)", [0.3, 0.6, 0.9, 1.2],
+        v => pr.GotoAsync(bodyYaw: v, duration: 0.8),
+        async () => await pr.GetBodyYawAsync()));
+    await pr.GotoAsync(bodyYaw: 0, duration: 0.8);
+
+    Console.WriteLine("\n=== measured envelope ===");
+    foreach (var f in findings) Console.WriteLine($"  {f}");
+
+    await pr.GotoAsync(bodyYaw: 0, headPose: neutral, antennas: (0, 0), duration: 1.0);
+    await Task.Delay(1200);
+    await pr.SetMotorModeAsync(MotorMode.Disabled);
+    Console.WriteLine("\nReturned to neutral, motors disabled.");
+    return 0;
+}
+
 if (args.Contains("--test-names"))
 {
     // Character switching is the feature Aubs will use most, and every character
@@ -677,6 +821,40 @@ if (args.Contains("--test-speech"))
     }
     Console.WriteLine($"\n{boundaryPass}/{boundaryCases.Length} boundary cases passed");
 
+    // Stage directions drive the servos. All of these are REAL model output
+    // captured from --test-loop runs, not phrasing invented to fit the classifier.
+    Console.WriteLine("\n  gesture classification:");
+    (string Action, RoseBody.Gesture Expect)[] gestureCases =
+    [
+        ("Antennas twitch excitedly as the torso rotates slightly", RoseBody.Gesture.Wiggle),
+        ("I bob my torso up and down enthusiastically, my antennas wiggling", RoseBody.Gesture.Bounce),
+        ("antennas wiggle excitedly", RoseBody.Gesture.Wiggle),
+        ("My antennas droop sadly", RoseBody.Gesture.Droop),
+        ("I tilt my head to one side, thinking for a moment", RoseBody.Gesture.Tilt),
+        ("I spin around in a circle, my torso rotating rapidly", RoseBody.Gesture.Spin),
+        ("Drone's head tilts to one side, concern etched on its face", RoseBody.Gesture.Tilt),
+        ("I look up in surprise", RoseBody.Gesture.LookUp),
+        ("nods enthusiastically", RoseBody.Gesture.Nod),
+        ("shakes her head", RoseBody.Gesture.Shake),
+        ("antennas perk up alertly", RoseBody.Gesture.Perk),
+        // "head" is a noun at index 0 - the verb has to win, not the body part.
+        ("Head spins around to face Aubs, a big smile on its face", RoseBody.Gesture.Spin),
+        ("head moves", RoseBody.Gesture.Tilt),
+        ("leaning forward with interest", RoseBody.Gesture.LeanIn),
+        ("", RoseBody.Gesture.None),
+        ("says nothing in particular", RoseBody.Gesture.None),
+    ];
+
+    var gesturePass = 0;
+    foreach (var (action, expect) in gestureCases)
+    {
+        var got = RoseBody.Classify(action);
+        var ok = got == expect;
+        if (ok) gesturePass++;
+        Console.WriteLine($"    [{(ok ? "PASS" : "FAIL")}] \"{action}\" -> {got}, expected {expect}");
+    }
+    Console.WriteLine($"\n{gesturePass}/{gestureCases.Length} gesture cases passed");
+
     // Switching character must need an explicit request. Merely TALKING about a
     // character must not silently change who Rose is mid-conversation.
     Console.WriteLine("\n  switch-intent gate (current = N):");
@@ -721,7 +899,8 @@ if (args.Contains("--test-speech"))
 
     var allOk = speechPass == cases.Length && sayableOk
                 && switchPass == switchCases.Length
-                && boundaryPass == boundaryCases.Length;
+                && boundaryPass == boundaryCases.Length
+                && gesturePass == gestureCases.Length;
     return allOk ? 0 : 1;
 }
 

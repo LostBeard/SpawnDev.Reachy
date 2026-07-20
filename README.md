@@ -21,8 +21,11 @@ robot never sends audio anywhere except to the PC on your LAN.
 - **You can talk to her.** Microphone to speech recognition to language model to speech
   synthesis to the robot's speaker, closed loop, roughly a second from the end of your
   sentence to the start of hers.
-- **Seven characters**, switchable out loud - "can you be Uzi?" - each with its own voice
-  and personality.
+- **Seven characters**, switchable out loud - "can you be Uzi?" - each with its own voice,
+  personality, resting antenna posture and movement size.
+- **She moves while she talks.** The model narrates its own actions
+  (`*antennas twitch excitedly*`), and those drive the real servos - head, antennas and
+  the torso the stock app never turns.
 - **Full REST surface** - motors, head pose, body yaw, volume, sounds, face tracking, DOA.
 - **Live microphone over WebRTC** - the robot's 4-mic array, decoded from Opus to 16 kHz
   mono PCM. The array has hardware echo cancellation in its XVF3800, so the robot does not
@@ -56,6 +59,8 @@ Run these instead of asking a child to find your bugs for you.
 | `--test-brain` | the language model alone, with latency per reply |
 | `--test-names` | what recognition ACTUALLY returns for each character name |
 | `--test-speech` | sentence splitting, action stripping, switch-intent gating |
+| `--test-body` | every gesture, driven by real stage directions the model produced |
+| `--probe-limits` | measures the real joint travel by commanding past it and reading back |
 | `--test-mic` | audio link with a live level meter |
 | `--test-voice` / `--test-loudness` / `--test-posture` | speech output, compression A/B, head position A/B |
 | `--test-characters` / `--test-signalling` / `--test-udp` | name resolution, WebRTC signalling, inbound UDP |
@@ -107,8 +112,33 @@ is what keeps it gapless.
 
 **Roleplay models narrate their actions inline**, in asterisks: `*antennas twitch* Wait,
 really?!`. That must never reach the synthesiser, which reads the punctuation out loud.
-Worth splitting rather than deleting - the robot really does have a head, antennas and a
-rotating torso, so the stage direction is a movement cue.
+Split rather than delete - the robot really does have a head, antennas and a rotating
+torso, so the stage direction is a free movement cue the model generates unprompted.
+
+**The joint limits are not what you would guess, and the daemon clamps silently.** An
+out-of-range `goto` returns success and simply does not go there, so gesture code written
+against an imagined range looks half-finished rather than failing. Measured with
+`--probe-limits`:
+
+| axis | limit |
+|---|---|
+| head yaw | > 1.55 rad (no clamp found) |
+| head pitch, down | ~0.68 rad |
+| head pitch, up | ~0.51 rad - noticeably less than down |
+| head roll | ~0.70 rad |
+| head lift (Z) | **0.0224 m** - hard stop |
+| antennas | ~3.1 rad - by far the largest range |
+| body yaw | ~0.98 rad, and additionally constrained to ~65 degrees of head yaw |
+
+Turning the head the same way first therefore buys extra torso travel.
+
+**Classify a stage direction by which cue appears EARLIEST, not by keyword priority.** The
+model writes the primary action first and qualifies it after. "Antennas twitch excitedly as
+the torso rotates" is an antenna twitch that happens to be excited; "I bob my torso up and
+down enthusiastically, my antennas wiggling" is a bob that happens to involve antennas.
+Position separates those; a fixed priority order gets one of them wrong whichever way you
+sort it. Bare body-part nouns ("head") are the exception - they are almost always the first
+word, so they only apply as a last-resort fallback.
 
 **Do not build turn-to-voice on DOA.** `GET /api/state/doa` parks at ~90 degrees as an idle
 default and returned 90 degrees for both "front" and "left" with an air conditioner in the

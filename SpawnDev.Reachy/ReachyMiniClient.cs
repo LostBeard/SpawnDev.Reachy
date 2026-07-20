@@ -75,6 +75,22 @@ public class ReachyMiniClient : IDisposable
         return d is null ? null : new XyzRpyPose(d.X, d.Y, d.Z, d.Roll, d.Pitch, d.Yaw);
     }
 
+    /// <summary>
+    /// Current antenna joint positions in radians, as (left, right).
+    /// </summary>
+    /// <remarks>
+    /// Reading these back is the only reliable way to discover the real travel
+    /// limits - the daemon silently clamps an out-of-range goto rather than
+    /// reporting an error, so a command that "succeeds" may not have moved
+    /// anywhere near where it was told to.
+    /// </remarks>
+    public async Task<(double Left, double Right)?> GetAntennaPositionsAsync(CancellationToken ct = default)
+    {
+        var a = await _http.GetFromJsonAsync("/api/state/present_antenna_joint_positions",
+            ReachyJson.Default.ListDouble, ct);
+        return a is { Count: >= 2 } ? (a[0], a[1]) : null;
+    }
+
     /// <summary>Direction of arrival from the mic array. See <see cref="DoaInfo"/> for caveats.</summary>
     public Task<DoaInfo?> GetDoaAsync(CancellationToken ct = default) =>
         _http.GetFromJsonAsync("/api/state/doa", ReachyJson.Default.DoaInfo, ct);
