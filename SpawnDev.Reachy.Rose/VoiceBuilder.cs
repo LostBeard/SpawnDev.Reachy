@@ -40,7 +40,7 @@ public static class VoiceBuilder
         var modelDir = Path.Combine(SolutionDir(), "models");
         var limit = int.TryParse(ArgValue(args, "--episodes="), out var n) ? n : int.MaxValue;
         var threshold = float.TryParse(ArgValue(args, "--threshold="), NumberStyles.Float, CultureInfo.InvariantCulture, out var th) ? th : 0.5f;
-        var perCharSeconds = double.TryParse(ArgValue(args, "--seconds="), NumberStyles.Float, CultureInfo.InvariantCulture, out var sec) ? sec : 90.0;
+        var maxRefSeconds = double.TryParse(ArgValue(args, "--seconds="), NumberStyles.Float, CultureInfo.InvariantCulture, out var sec) ? sec : 15.0;
 
         var seg = Path.Combine(modelDir, "sherpa-onnx-pyannote-segmentation-3-0", "model.onnx");
         var emb = Path.Combine(modelDir, "wespeaker_en_voxceleb_CAM++.onnx");
@@ -62,8 +62,9 @@ public static class VoiceBuilder
 
         using var diar = MakeDiarizer(seg, emb, threshold);
 
-        // Per-character pooled audio, across all episodes.
-        var pooled = new Dictionary<string, List<float[]>>(StringComparer.OrdinalIgnoreCase);
+        // Per-character candidate reference segments (audio, duration, transcript),
+        // across all episodes. The best single one becomes the cloning reference.
+        var pooled = new Dictionary<string, List<(float[] Audio, double Dur, string Text)>>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var mkv in episodes)
         {
@@ -78,7 +79,7 @@ public static class VoiceBuilder
             var samples = ReadWavMono16k(wavPath);
             if (samples.Length == 0) { Console.WriteLine("  no audio, skipped"); continue; }
 
-            var labels = ParseSrt(srtPath, out var excludeRanges);
+            var labels = ParseSrt(srtPath, out var excludeRanges, out var speechCues);
             Console.WriteLine($"  audio {samples.Length / (double)Rate / 60.0:F1} min, " +
                               $"{labels.Count} name-labelled cue(s), {excludeRanges.Count} sound-cue region(s)");
 
@@ -97,39 +98,46 @@ public static class VoiceBuilder
             {
                 if (!clusterName.TryGetValue(s.Speaker, out var name)) continue;
                 if (OverlapsExcluded(s.Start, s.End, excludeRanges)) continue;
+                var dur = s.End - s.Start;
+                if (dur < 0.5) continue;                 // ignore sub-half-second scraps
                 var clip = Slice(samples, s.Start, s.End);
-                if (clip.Length < Rate / 2) continue;   // ignore sub-half-second scraps
+                var txt = TextForSegment(speechCues, s.Start, s.End);
                 if (!pooled.TryGetValue(name, out var list)) pooled[name] = list = [];
-                list.Add(clip);
+                list.Add((clip, dur, txt));
             }
         }
 
-        // Write reference clips for the playable characters only.
+        // Write ONE clean reference clip + transcript per playable character.
         Console.WriteLine("\n== reference clips ==");
         var wrote = 0;
         foreach (var c in CharacterLibrary.All)
         {
-            if (!pooled.TryGetValue(c.Name, out var clips) || clips.Count == 0)
+            if (!pooled.TryGetValue(c.Name, out var segs) || segs.Count == 0)
             {
                 Console.WriteLine($"  {c.Name,-5}  (no audio found)");
                 continue;
             }
 
-            // Longest segments first: cleaner, more continuous speech makes a better
-            // cloning reference than a pile of one-word fragments.
-            var chosen = new List<float[]>();
-            double total = 0;
-            foreach (var clip in clips.OrderByDescending(x => x.Length))
+            // ZipVoice wants ONE clean contiguous reference with its exact transcript,
+            // not a pile of fragments. Prefer the longest named segment that has words
+            // and sits in a good reference length - a very long one is usually two
+            // speakers the diarizer merged, and a wordless one has no transcript.
+            var best = segs
+                .Where(x => x.Text.Length > 0 && x.Dur >= 3.0 && x.Dur <= maxRefSeconds)
+                .OrderByDescending(x => x.Dur)
+                .FirstOrDefault();
+            if (best.Audio is null)
+                best = segs.Where(x => x.Text.Length > 0).OrderByDescending(x => x.Dur).FirstOrDefault();
+            if (best.Audio is null)
             {
-                if (total >= perCharSeconds) break;
-                chosen.Add(clip);
-                total += clip.Length / (double)Rate;
+                Console.WriteLine($"  {c.Name,-5}  (no segment with a transcript)");
+                continue;
             }
 
-            var joined = Concat(chosen, gapMs: 250);
-            var path = Path.Combine(outDir, $"{c.Name}.wav");
-            WriteWavMono16k(path, joined);
-            Console.WriteLine($"  {c.Name,-5}  {total,5:F1}s from {chosen.Count}/{clips.Count} segment(s) -> {Path.GetFileName(path)}");
+            var wav = Path.Combine(outDir, $"{c.Name}.wav");
+            WriteWavMono16k(wav, best.Audio);
+            File.WriteAllText(Path.Combine(outDir, $"{c.Name}.txt"), best.Text);
+            Console.WriteLine($"  {c.Name,-5}  {best.Dur,5:F1}s  \"{Truncate(best.Text, 55)}\" -> {c.Name}.wav + .txt");
             wrote++;
         }
 
@@ -189,11 +197,14 @@ public static class VoiceBuilder
     /// Parses an SRT into name-labelled cues and the time ranges covered by
     /// lowercase sound cues (to exclude from reference audio).
     /// </summary>
-    private static List<(double Start, double End, string Name)> ParseSrt(string path, out List<(double, double)> exclude)
+    private static List<(double Start, double End, string Name)> ParseSrt(
+        string path, out List<(double, double)> exclude, out List<(double Start, double End, string Text)> speech)
     {
         var labels = new List<(double, double, string)>();
         var excl = new List<(double, double)>();
+        var spk = new List<(double, double, string)>();
         exclude = excl;
+        speech = spk;
         if (!File.Exists(path)) return labels;
 
         var lines = File.ReadAllLines(path);
@@ -209,12 +220,14 @@ public static class VoiceBuilder
                 var name = m.Success ? Canonical(m.Groups[1].Value) : null;
                 if (name is not null) labels.Add((start, end, name));
 
-                // A cue that is ONLY a lowercase sound cue - "[grunts]",
-                // "[dramatic music playing]" - is a region with no clean speech.
+                // Brackets removed leaves the spoken words - the transcript ZipVoice
+                // pairs with the reference audio. A cue that reduces to nothing but a
+                // lowercase sound cue ("[grunts]", "[music playing]") has no clean
+                // speech, so it marks a region to exclude instead.
                 var stripped = AnyBracket.Replace(t, "").Trim();
-                var lowerCueOnly = stripped.Length == 0
-                    && AnyBracket.Matches(t).Any(b => b.Groups[1].Value.Length > 0 && char.IsLower(b.Groups[1].Value[0]));
-                if (lowerCueOnly) excl.Add((start, end));
+                if (stripped.Length > 0) spk.Add((start, end, stripped));
+                else if (AnyBracket.Matches(t).Any(b => b.Groups[1].Value.Length > 0 && char.IsLower(b.Groups[1].Value[0])))
+                    excl.Add((start, end));
             }
             text.Clear();
         }
@@ -251,6 +264,13 @@ public static class VoiceBuilder
 
     private static bool OverlapsExcluded(double s, double e, List<(double, double)> exclude) =>
         exclude.Any(r => Math.Min(e, r.Item2) - Math.Max(s, r.Item1) > 0);
+
+    /// <summary>The transcript of a diarization segment: the speech cues that overlap its time window, in order.</summary>
+    private static string TextForSegment(List<(double Start, double End, string Text)> cues, double s, double e) =>
+        string.Join(" ", cues.Where(c => Math.Min(e, c.End) - Math.Max(s, c.Start) > 0.1)
+                             .OrderBy(c => c.Start).Select(c => c.Text)).Trim();
+
+    private static string Truncate(string s, int n) => s.Length <= n ? s : s[..n] + "...";
 
     // ---- ffmpeg extraction --------------------------------------------------
 
@@ -363,21 +383,6 @@ public static class VoiceBuilder
         var a = Math.Clamp((int)(startSec * Rate), 0, samples.Length);
         var b = Math.Clamp((int)(endSec * Rate), a, samples.Length);
         return samples[a..b];
-    }
-
-    private static float[] Concat(List<float[]> clips, int gapMs)
-    {
-        var gap = new float[gapMs * Rate / 1000];
-        var total = clips.Sum(c => c.Length) + gap.Length * Math.Max(0, clips.Count - 1);
-        var outp = new float[total];
-        var at = 0;
-        for (var i = 0; i < clips.Count; i++)
-        {
-            Array.Copy(clips[i], 0, outp, at, clips[i].Length);
-            at += clips[i].Length;
-            if (i < clips.Count - 1) { Array.Copy(gap, 0, outp, at, gap.Length); at += gap.Length; }
-        }
-        return outp;
     }
 
     private static void WriteWavMono16k(string path, float[] samples)

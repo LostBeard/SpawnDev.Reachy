@@ -103,6 +103,83 @@ if (args.Contains("--build-voices"))
     return await VoiceBuilder.RunAsync(args);
 }
 
+if (args.Contains("--test-clone"))
+{
+    // Proves ZipVoice clones: speaks new text in the voice of a reference clip.
+    // Defaults to the model's own bundled prompt.wav so it can be verified before
+    // the per-character clips exist. Give --ref=<wav> + --reftext="..." (or a .txt
+    // sidecar, which --build-voices writes) to clone a real character.
+    var md = ModelDir();
+    if (!RoseVoiceClone.ModelPresent(md))
+    {
+        Console.WriteLine("ZipVoice model missing under models/sherpa-onnx-zipvoice-distill-zh-en-emilia");
+        return 1;
+    }
+
+    var refWav = args.FirstOrDefault(a => a.StartsWith("--ref="))?["--ref=".Length..]
+                 ?? Path.Combine(md, "sherpa-onnx-zipvoice-distill-zh-en-emilia", "prompt.wav");
+    var refText = args.FirstOrDefault(a => a.StartsWith("--reftext="))?["--reftext=".Length..];
+    var sidecar = Path.ChangeExtension(refWav, ".txt");
+    if (refText is null && File.Exists(sidecar)) refText = File.ReadAllText(sidecar).Trim();
+    if (string.IsNullOrWhiteSpace(refText))
+    {
+        Console.WriteLine("need --reftext=\"...\" (or a .txt sidecar next to the ref wav)");
+        return 1;
+    }
+
+    var say = args.FirstOrDefault(a => a.StartsWith("--say="))?["--say=".Length..]
+              ?? "Oh gosh, hi Aubs! It's N, and this is my real voice now!";
+    var outPath = args.FirstOrDefault(a => a.StartsWith("--out="))?["--out=".Length..]
+                  ?? Path.Combine(md, "..", "scratchpad", "clone_out.wav");
+
+    var (refSamples, refRate) = ReadWavAnyRate(refWav);
+    if (refSamples.Length == 0) { Console.WriteLine($"could not read {refWav}"); return 1; }
+    Console.WriteLine($"reference: {refSamples.Length / (double)refRate:F1}s @ {refRate}Hz\n  text: \"{refText}\"");
+
+    using var clone = new RoseVoiceClone(md);
+    var sw = System.Diagnostics.Stopwatch.StartNew();
+    var pcm = clone.Clone(say, refSamples, refRate, refText);
+    Console.WriteLine($"said:  \"{say}\"\ngenerated {pcm.Length / 2 / (double)clone.SampleRate:F1}s in {sw.Elapsed.TotalSeconds:F1}s");
+
+    Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outPath))!);
+    WriteWavPcm16(outPath, pcm, clone.SampleRate);
+    Console.WriteLine($"wrote {Path.GetFullPath(outPath)}");
+    return pcm.Length > 0 ? 0 : 1;
+
+    // Reads a 16-bit PCM mono wav, returning samples in [-1,1] and the header rate.
+    static (float[] Samples, int Rate) ReadWavAnyRate(string path)
+    {
+        if (!File.Exists(path)) return ([], 0);
+        var b = File.ReadAllBytes(path);
+        var rate = 16000; var pos = 12;
+        while (pos + 8 <= b.Length)
+        {
+            var id = System.Text.Encoding.ASCII.GetString(b, pos, 4);
+            var size = BitConverter.ToInt32(b, pos + 4);
+            if (id == "fmt ") rate = BitConverter.ToInt32(b, pos + 12);
+            else if (id == "data")
+            {
+                var count = Math.Min(size, b.Length - pos - 8) / 2;
+                var s = new float[count];
+                for (var i = 0; i < count; i++) s[i] = BitConverter.ToInt16(b, pos + 8 + i * 2) / 32768f;
+                return (s, rate);
+            }
+            if (size <= 0) break;
+            pos += 8 + size + (size % 2);
+        }
+        return ([], rate);
+    }
+
+    static void WriteWavPcm16(string path, byte[] pcm, int rate)
+    {
+        using var w = new BinaryWriter(File.Create(path));
+        w.Write("RIFF"u8); w.Write(36 + pcm.Length); w.Write("WAVE"u8);
+        w.Write("fmt "u8); w.Write(16); w.Write((short)1); w.Write((short)1);
+        w.Write(rate); w.Write(rate * 2); w.Write((short)2); w.Write((short)16);
+        w.Write("data"u8); w.Write(pcm.Length); w.Write(pcm);
+    }
+}
+
 if (args.Contains("--test-idle"))
 {
     // Proves idle motion actually moves the antennas on the real robot, by
