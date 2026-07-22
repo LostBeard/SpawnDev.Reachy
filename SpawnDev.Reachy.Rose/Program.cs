@@ -95,6 +95,14 @@ if (args.Contains("--test-body"))
     return 0;
 }
 
+if (args.Contains("--build-voices"))
+{
+    // Data-prep, run once: pulls the English audio + CC out of the show MKVs and
+    // diarizes each episode, using the sparse [Name] captions to name the speaker
+    // clusters, then pools clean per-character audio into cloning reference clips.
+    return await VoiceBuilder.RunAsync(args);
+}
+
 if (args.Contains("--test-idle"))
 {
     // Proves idle motion actually moves the antennas on the real robot, by
