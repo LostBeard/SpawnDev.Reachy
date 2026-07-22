@@ -136,7 +136,29 @@ if (args.Contains("--test-clone"))
     if (refSamples.Length == 0) { Console.WriteLine($"could not read {refWav}"); return 1; }
     Console.WriteLine($"reference: {refSamples.Length / (double)refRate:F1}s @ {refRate}Hz\n  text: \"{refText}\"");
 
-    using var clone = new RoseVoiceClone(md);
+    // Show audio carries room reverb and a music bed; ZipVoice clones that ambience
+    // too, which is the "echoish" quality. Strip it off the reference first.
+    if (args.Contains("--denoise"))
+    {
+        var denModel = Path.Combine(md, "gtcrn_simple.onnx");
+        if (File.Exists(denModel))
+        {
+            var dcfg = new SherpaOnnx.OfflineSpeechDenoiserConfig();
+            dcfg.Model.Gtcrn.Model = denModel;
+            dcfg.Model.NumThreads = 2;
+            using var denoiser = new SherpaOnnx.OfflineSpeechDenoiser(dcfg);
+            var cleaned = denoiser.Run(refSamples, refRate);
+            refSamples = cleaned.Samples;
+            refRate = denoiser.SampleRate;
+            Console.WriteLine($"denoised reference -> {refSamples.Length / (double)refRate:F1}s @ {refRate}Hz");
+        }
+        else Console.WriteLine("denoiser model missing (models/gtcrn_simple.onnx)");
+    }
+
+    var fp32 = args.Contains("--fp32");
+    var steps = int.TryParse(args.FirstOrDefault(a => a.StartsWith("--steps="))?["--steps=".Length..], out var st) ? st : 4;
+    Console.WriteLine($"model: {(fp32 ? "fp32" : "int8")}, steps: {steps}");
+    using var clone = new RoseVoiceClone(md, fp32, steps);
     var sw = System.Diagnostics.Stopwatch.StartNew();
     var pcm = clone.Clone(say, refSamples, refRate, refText);
     Console.WriteLine($"said:  \"{say}\"\ngenerated {pcm.Length / 2 / (double)clone.SampleRate:F1}s in {sw.Elapsed.TotalSeconds:F1}s");

@@ -32,16 +32,22 @@ public sealed class RoseVoiceClone : IDisposable
     public int NumSteps { get; set; } = 4;
 
     /// <summary>The int8 ZipVoice package - the one the official example ships and tests, with a lexicon.</summary>
-    private const string ModelName = "sherpa-onnx-zipvoice-distill-int8-zh-en-emilia";
+    private const string Int8Name = "sherpa-onnx-zipvoice-distill-int8-zh-en-emilia";
 
-    /// <param name="modelDir">Folder holding the ZipVoice model package.</param>
-    public RoseVoiceClone(string modelDir)
+    /// <summary>The fp32 package - higher quality, but shipped without a lexicon (copy one in).</summary>
+    private const string Fp32Name = "sherpa-onnx-zipvoice-distill-zh-en-emilia";
+
+    /// <param name="modelDir">Folder holding the ZipVoice model package(s).</param>
+    /// <param name="fp32">Use the full-precision model instead of int8 - less quantization artifact.</param>
+    /// <param name="numSteps">Flow-matching steps; more trades time for quality.</param>
+    public RoseVoiceClone(string modelDir, bool fp32 = false, int numSteps = 4)
     {
-        var dir = Path.Combine(modelDir, ModelName);
+        NumSteps = numSteps;
+        var dir = Path.Combine(modelDir, fp32 ? Fp32Name : Int8Name);
         var config = new OfflineTtsConfig();
         config.Model.ZipVoice.Tokens = Path.Combine(dir, "tokens.txt");
-        config.Model.ZipVoice.Encoder = Path.Combine(dir, "encoder.int8.onnx");
-        config.Model.ZipVoice.Decoder = Path.Combine(dir, "decoder.int8.onnx");
+        config.Model.ZipVoice.Encoder = Path.Combine(dir, fp32 ? "text_encoder.onnx" : "encoder.int8.onnx");
+        config.Model.ZipVoice.Decoder = Path.Combine(dir, fp32 ? "fm_decoder.onnx" : "decoder.int8.onnx");
         // The vocoder is shared across packages; use whichever copy is on disk.
         config.Model.ZipVoice.Vocoder = ResolveVocoder(modelDir, dir);
         config.Model.ZipVoice.DataDir = Path.Combine(dir, "espeak-ng-data");
@@ -55,15 +61,14 @@ public sealed class RoseVoiceClone : IDisposable
     {
         var inPackage = Path.Combine(dir, "vocos_24khz.onnx");
         if (File.Exists(inPackage)) return inPackage;
-        // Fall back to the copy in the fp32 package if that is what was downloaded.
-        var alt = Path.Combine(modelDir, "sherpa-onnx-zipvoice-distill-zh-en-emilia", "vocos_24khz.onnx");
+        var alt = Path.Combine(modelDir, Fp32Name, "vocos_24khz.onnx");
         return File.Exists(alt) ? alt : inPackage;
     }
 
     /// <summary>True once the model files are present and the engine has loaded.</summary>
     public static bool ModelPresent(string modelDir) =>
-        File.Exists(Path.Combine(modelDir, ModelName, "decoder.int8.onnx"))
-        && File.Exists(Path.Combine(modelDir, ModelName, "lexicon.txt"));
+        File.Exists(Path.Combine(modelDir, Int8Name, "decoder.int8.onnx"))
+        && File.Exists(Path.Combine(modelDir, Int8Name, "lexicon.txt"));
 
     /// <summary>
     /// Speaks <paramref name="text"/> in the voice of <paramref name="reference"/>,
@@ -76,7 +81,9 @@ public sealed class RoseVoiceClone : IDisposable
     {
         var gen = new OfflineTtsGenerationConfig
         {
-            ReferenceAudio = reference,
+            // A quarter second of trailing silence so the model does not carry the
+            // last reference word into the start of the generated line.
+            ReferenceAudio = PadTail(reference, referenceSampleRate / 4),
             ReferenceSampleRate = referenceSampleRate,
             ReferenceText = referenceText,
             NumSteps = NumSteps,
@@ -94,6 +101,13 @@ public sealed class RoseVoiceClone : IDisposable
             pcm[i * 2 + 1] = (byte)(v >> 8);
         }
         return pcm;
+    }
+
+    private static float[] PadTail(float[] samples, int silenceSamples)
+    {
+        var padded = new float[samples.Length + silenceSamples];
+        Array.Copy(samples, padded, samples.Length);
+        return padded;
     }
 
     public void Dispose() => _tts.Dispose();
