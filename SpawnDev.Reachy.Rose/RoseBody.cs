@@ -15,12 +15,19 @@ namespace SpawnDev.Reachy.Rose;
 /// success and simply does not go there, so commanding a range that does not exist
 /// produces a gesture that looks half-finished rather than an error.
 /// </remarks>
-public sealed class RoseBody
+public sealed class RoseBody : IAsyncDisposable
 {
     private readonly ReachyMiniClient _robot;
 
     /// <summary>One gesture at a time. Overlapping gotos fight each other and jitter.</summary>
     private readonly SemaphoreSlim _moving = new(1, 1);
+
+    // ---- idle life ----
+    private readonly CancellationTokenSource _idleCts = new();
+    private readonly Random _rng = new();
+    private Task? _idleLoop;
+    private volatile bool _idleEnabled;
+    private Character? _idleCharacter;
 
     public event Action<string>? Log;
 
@@ -320,5 +327,128 @@ public sealed class RoseBody
     public async Task SettleAsync(Character c, CancellationToken ct = default)
     {
         try { await RestAsync(c, ct, duration: 0.8); } catch { }
+    }
+
+    // ---- idle life ----------------------------------------------------------
+
+    /// <summary>
+    /// Whether idle antenna motion is currently allowed to run. Set true while
+    /// Rose is listening, false while she is speaking.
+    /// </summary>
+    public bool Idle { get => _idleEnabled; set => _idleEnabled = value; }
+
+    /// <summary>
+    /// Starts the idle-life loop: small unprompted antenna movements while
+    /// <see cref="Idle"/> is set, so Rose reads as alive between turns instead of
+    /// frozen.
+    /// </summary>
+    /// <remarks>
+    /// Antennas only, on purpose. While she is listening the daemon's face tracker
+    /// owns the head, and while she is speaking gestures own everything - both
+    /// write the head and body. The antennas are the one channel neither of those
+    /// touches, so idle motion can use them without ever fighting either, and they
+    /// are also the most expressive, character-defining part of the robot. A goto
+    /// that commands only the antennas leaves the head exactly where the tracker
+    /// put it.
+    /// </remarks>
+    public void StartIdle(Character character)
+    {
+        _idleCharacter = character;
+        _idleLoop ??= Task.Run(() => IdleLoopAsync(_idleCts.Token));
+    }
+
+    /// <summary>Updates whose resting antenna posture idle motion drifts around.</summary>
+    public void SetIdleCharacter(Character character) => _idleCharacter = character;
+
+    /// <summary>
+    /// Stops idle motion and waits for any in-flight idle twitch to release the
+    /// mover, so a reply's gestures are never skipped by an idle move mid-flight.
+    /// </summary>
+    public async Task QuietAsync(CancellationToken ct = default)
+    {
+        _idleEnabled = false;
+        // Cannot return until whatever idle move was running has released.
+        await _moving.WaitAsync(ct);
+        _moving.Release();
+    }
+
+    private async Task IdleLoopAsync(CancellationToken ct)
+    {
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                // Randomised gap so the motion never settles into a mechanical rhythm.
+                await Task.Delay(TimeSpan.FromMilliseconds(_rng.Next(2500, 6000)), ct);
+
+                if (!_idleEnabled || _idleCharacter is null) continue;
+
+                // Never fight a real gesture: if one holds the mover, skip this tick.
+                if (!await _moving.WaitAsync(0, ct)) continue;
+                try
+                {
+                    // The flag may have flipped to a reply while we were waiting.
+                    if (_idleEnabled && _idleCharacter is { } c)
+                        await IdleTwitchAsync(c, ct);
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception ex) { Log?.Invoke($"idle failed: {ex.GetType().Name}: {ex.Message}"); }
+                finally { _moving.Release(); }
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    /// <summary>
+    /// One small antenna movement around the character's resting posture, then a
+    /// return to rest so the next gesture starts from a known pose.
+    /// </summary>
+    private async Task IdleTwitchAsync(Character c, CancellationToken ct)
+    {
+        var s = Math.Clamp(c.MotionScale, 0.3, 1.6);
+        var (rl, rr) = c.AntennaRest;
+
+        // Small offset, scaled by the character's animation level, so Doll barely
+        // stirs and V fidgets. Sign is random so a twitch can go either way.
+        double Off() => (_rng.NextDouble() * 0.18 + 0.06) * s * (_rng.Next(2) == 0 ? 1 : -1);
+
+        switch (_rng.Next(3))
+        {
+            case 0:
+                // Both antennas drift together, like a slow breath.
+                var d0 = Off();
+                await MoveAntennasAsync(rl + d0, rr + d0, 0.6, ct);
+                break;
+            case 1:
+                // A single antenna flicks - a small turn of attention.
+                if (_rng.Next(2) == 0) await MoveAntennasAsync(rl + Off(), rr, 0.35, ct);
+                else                   await MoveAntennasAsync(rl, rr + Off(), 0.35, ct);
+                break;
+            default:
+                // A gentle opposed sway.
+                var d2 = Off();
+                await MoveAntennasAsync(rl + d2, rr - d2, 0.5, ct);
+                break;
+        }
+
+        await Task.Delay(_rng.Next(250, 600), ct);
+        await MoveAntennasAsync(rl, rr, 0.6, ct);
+    }
+
+    private Task MoveAntennasAsync(double left, double right, double duration, CancellationToken ct) =>
+        _robot.GotoAsync(
+            antennas: (Clamp(left, -AntennaMax, AntennaMax), Clamp(right, -AntennaMax, AntennaMax)),
+            duration: duration, interpolation: Interpolation.EaseInOut, ct: ct);
+
+    public async ValueTask DisposeAsync()
+    {
+        _idleEnabled = false;
+        _idleCts.Cancel();
+        if (_idleLoop is not null)
+        {
+            try { await _idleLoop; } catch { /* shutting down */ }
+        }
+        _idleCts.Dispose();
+        _moving.Dispose();
     }
 }

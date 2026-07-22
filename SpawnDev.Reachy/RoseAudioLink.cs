@@ -165,7 +165,12 @@ public sealed class RoseAudioLink : IAsyncDisposable
                     }
                     await _pc.setLocalDescription(answer);
 
-                    await _signalling.SendAnswerAsync(answer.sdp, token);
+                    // A null answer SDP means createAnswer produced nothing to send -
+                    // there is no handshake to continue, so fail rather than post an
+                    // empty body the robot would reject anyway.
+                    var answerSdp = answer.sdp
+                        ?? throw new InvalidOperationException("createAnswer produced no SDP");
+                    await _signalling.SendAnswerAsync(answerSdp, token);
                     Log?.Invoke("answer sent");
                     offerReceived.TrySetResult(true);
                 }

@@ -113,6 +113,11 @@ public sealed class RoseConversation : IAsyncDisposable
         try { await warm; } catch (Exception ex) { Log?.Invoke($"warmup failed: {ex.Message}"); }
 
         await SetWatchingAsync(true, ct);
+
+        // She is now listening. Give her small unprompted antenna movements so she
+        // reads as alive between turns rather than sitting perfectly still.
+        _body.StartIdle(_character);
+        _body.Idle = true;
     }
 
     private async Task HandleUtteranceAsync(string text)
@@ -127,13 +132,17 @@ public sealed class RoseConversation : IAsyncDisposable
             OnLine?.Invoke("Aubs", text);
 
             // Take the head back from the tracker for the whole reply, so gestures
-            // and the tracker are never driving the same joints at once.
+            // and the tracker are never driving the same joints at once. Quiet idle
+            // motion first and wait for any twitch in flight, so the reply's first
+            // gesture is never skipped by an idle move still holding the mover.
             await SetWatchingAsync(false, _cts.Token);
+            await _body.QuietAsync(_cts.Token);
 
             if (TrySwitchCharacter(text, out var switched))
             {
                 _character = switched;
                 _brain.Forget();
+                _body.SetIdleCharacter(switched);
 
                 // Settle into the new character's resting antenna posture, which is
                 // a large part of reading who she is at a glance.
@@ -205,6 +214,7 @@ public sealed class RoseConversation : IAsyncDisposable
             // Back to watching however the turn ended, including a character switch
             // or a failure - otherwise she goes blind for the rest of the session.
             try { await SetWatchingAsync(true, CancellationToken.None); } catch { }
+            _body.Idle = true;
             _turn.Release();
         }
     }
@@ -306,6 +316,10 @@ public sealed class RoseConversation : IAsyncDisposable
         // Hand the VRAM back before tearing down, while the token is still live.
         await _brain.ReleaseAsync();
 
+        // Stop idle motion before the final settle so the two do not chase each
+        // other on the way to the resting pose.
+        _body.Idle = false;
+
         // Park her tidily and drop the motors. Holding a pose under load can put
         // them into thermal protection, and Rose is left switched on for hours.
         try
@@ -317,6 +331,7 @@ public sealed class RoseConversation : IAsyncDisposable
         catch { /* shutting down anyway */ }
 
         _cts.Cancel();
+        await _body.DisposeAsync();
         await _ears.DisposeAsync();
         await _link.DisposeAsync();
         _voice.Dispose();

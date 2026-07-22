@@ -95,6 +95,63 @@ if (args.Contains("--test-body"))
     return 0;
 }
 
+if (args.Contains("--test-idle"))
+{
+    // Proves idle motion actually moves the antennas on the real robot, by
+    // running the same idle path the live loop uses and reading the present
+    // antenna positions back from the daemon. Idle is antennas-only by design -
+    // the head belongs to the face tracker while listening - so movement is
+    // measured on the antenna joints, not the head.
+    var idleIp = args.FirstOrDefault(a => a.Contains('.')) ?? "192.168.1.170";
+    var seconds = int.TryParse(
+        args.FirstOrDefault(a => a.StartsWith("--seconds="))?["--seconds=".Length..], out var s) ? s : 25;
+
+    using var ir = new ReachyMiniClient(idleIp);
+    await ir.SetMotorModeAsync(MotorMode.Enabled);
+
+    var idleBody = new RoseBody(ir);
+    idleBody.Log += m => Console.WriteLine($"  [log] {m}");
+
+    var who = CharacterLibrary.N;
+    await idleBody.SettleAsync(who);
+    await Task.Delay(600);
+
+    idleBody.StartIdle(who);
+    idleBody.Idle = true;
+    Console.WriteLine($"\nIdle running for {who.Name} ({seconds}s). Sampling antenna positions...\n");
+
+    // Sample the real joints twice a second and report how far they wander from
+    // the resting posture - a frozen robot would read ~0 movement throughout.
+    var samples = 0;
+    var moved = 0;
+    double maxDev = 0;
+    var (restL, restR) = who.AntennaRest;
+    var until = DateTime.UtcNow.AddSeconds(seconds);
+    while (DateTime.UtcNow < until)
+    {
+        var a = await ir.GetAntennaPositionsAsync();
+        if (a is { } pos)
+        {
+            var dev = Math.Max(Math.Abs(pos.Left - restL), Math.Abs(pos.Right - restR));
+            maxDev = Math.Max(maxDev, dev);
+            samples++;
+            if (dev > 0.03) moved++;
+            Console.WriteLine($"  antennas ({pos.Left,6:F3}, {pos.Right,6:F3})  dev {dev:F3}");
+        }
+        await Task.Delay(500);
+    }
+
+    idleBody.Idle = false;
+    await idleBody.SettleAsync(who);
+    await Task.Delay(800);
+    await idleBody.DisposeAsync();
+    await ir.SetMotorModeAsync(MotorMode.Disabled);
+
+    Console.WriteLine($"\n{moved}/{samples} samples showed antenna movement, max deviation {maxDev:F3} rad.");
+    Console.WriteLine(moved > 0 ? "Idle motion is live." : "NO movement detected - idle is not driving the antennas.");
+    return moved > 0 ? 0 : 1;
+}
+
 if (args.Contains("--probe-limits"))
 {
     // Finds the REAL travel limits by commanding past them and reading back what
