@@ -53,17 +53,24 @@ public sealed class RoseConversation : IAsyncDisposable
     /// model, speech, and the robot's speaker - is the identical live path, which is
     /// what makes the loop testable without a person in the room.
     /// </param>
+    /// <param name="cloneVoices">
+    /// Speak as the real show characters, for every character with a reference clip in
+    /// models/voiceprints. Characters without one keep their Kokoro voice, so this is
+    /// safe to leave on while references are still being chosen.
+    /// </param>
     public RoseConversation(
         string robotHost,
         string modelDir,
         string ollamaModel = "llama3.1:8b",
-        bool useMicrophone = true)
+        bool useMicrophone = true,
+        bool cloneVoices = false,
+        int cloneSteps = 4)
     {
         _robot = new ReachyMiniClient(robotHost);
         _link = new RoseAudioLink(robotHost);
         _ears = new RoseEars(modelDir);
         _brain = new RoseBrain(ollamaModel);
-        _voice = new RoseVoice(_robot);
+        _voice = new RoseVoice(_robot, cloneVoices: cloneVoices, cloneSteps: cloneSteps);
         _body = new RoseBody(_robot);
         _useMicrophone = useMicrophone;
     }

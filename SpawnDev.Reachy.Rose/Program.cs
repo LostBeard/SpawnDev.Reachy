@@ -19,11 +19,16 @@ static string ModelDir()
 
 if (args.Contains("--talk"))
 {
-    var talkIp = args.FirstOrDefault(a => a.Contains('.')) ?? "192.168.1.170";
+    // Only a bare argument can be the robot's address - an option value can contain a
+    // dot too ("--model=llama3.1:8b"), and picking that up silently pointed her at a
+    // host that does not exist.
+    var talkIp = args.FirstOrDefault(a => !a.StartsWith("--") && a.Contains('.')) ?? "192.168.1.170";
     var model = args.FirstOrDefault(a => a.StartsWith("--model="))?["--model=".Length..]
                 ?? "llama3.1:8b";
 
-    await using var convo = new RoseConversation(talkIp, ModelDir(), model);
+    var cloneSteps = int.TryParse(args.FirstOrDefault(a => a.StartsWith("--steps="))?["--steps=".Length..], out var cs) ? cs : 4;
+    await using var convo = new RoseConversation(
+        talkIp, ModelDir(), model, cloneVoices: args.Contains("--clone"), cloneSteps: cloneSteps);
 
     convo.OnLine += (who, what) =>
     {
@@ -97,10 +102,44 @@ if (args.Contains("--test-body"))
 
 if (args.Contains("--build-voices"))
 {
-    // Data-prep, run once: pulls the English audio + CC out of the show MKVs and
-    // diarizes each episode, using the sparse [Name] captions to name the speaker
-    // clusters, then pools clean per-character audio into cloning reference clips.
+    // Data-prep: pulls the English audio + CC out of the show MKVs, cuts a reference
+    // clip per character from a captioned single-speaker line, and denoises it.
+    // Selection is ranked on measured calmness - see VoiceCandidates. --keep leaves
+    // any voiceprint already chosen by ear alone.
     return await VoiceBuilder.RunAsync(args);
+}
+
+if (args.Contains("--candidates"))
+{
+    // Builds a ranked shortlist of reference lines for one character and clones each
+    // one saying the SAME calm test sentence, so the only thing that differs between
+    // the clips you compare is the reference itself.
+    //
+    //   --candidates --name=N [--top=8] [--min=3] [--max=9] [--say="..."] [--no-clone]
+    return await VoiceCandidates.RunAsync(args);
+}
+
+if (args.Contains("--sheet") && !args.Contains("--pick"))
+{
+    // A ranked contact sheet of the calmest, cleanest lines in the season, whoever
+    // says them - read the text to spot your character, play the clip to confirm.
+    //   --sheet [--top=40] [--contains=word] [--f0min= --f0max=]
+    return await VoiceCandidates.SheetAsync(args);
+}
+
+if (args.Contains("--pick"))
+{
+    // Promotes one shortlisted candidate to that character's live voiceprint.
+    //   --pick --name=N --index=3
+    return VoiceCandidates.Pick(args);
+}
+
+if (args.Contains("--audition"))
+{
+    // Cuts, denoises and clones an arbitrary window of an episode - for a line picked
+    // by ear, and for characters the captions never label on their own (Doll).
+    //   --audition --ep=E03 --from=12:34.5 --to=12:41 --reftext="exact words" [--say="..."] [--name=N]
+    return await VoiceCandidates.AuditionAsync(args);
 }
 
 if (args.Contains("--test-clone"))
@@ -924,6 +963,70 @@ if (args.Contains("--reflect-tts"))
         foreach (var m in members) Console.WriteLine(m);
     }
     return 0;
+}
+
+if (args.Contains("--test-voiceprints"))
+{
+    // End-to-end check of the show-voice path: real reference clips, real cloner, real
+    // upload, real playback out of Rose. Also proves the content-addressed cache
+    // actually short-circuits, which is what keeps a repeated line free.
+    var vpIp = args.FirstOrDefault(a => !a.StartsWith("--") && a.Contains('.')) ?? "192.168.1.170";
+    var vpSteps = int.TryParse(args.FirstOrDefault(a => a.StartsWith("--steps="))?["--steps=".Length..], out var vs) ? vs : 4;
+    var vpName = args.FirstOrDefault(a => a.StartsWith("--name="))?["--name=".Length..] ?? "N";
+    var silent = args.Contains("--no-play");
+
+    var who = CharacterLibrary.Find(vpName);
+    if (who is null) { Console.WriteLine($"unknown character '{vpName}'"); return 1; }
+
+    using var vpRobot = new ReachyMiniClient(vpIp);
+    using var vpVoice = new RoseVoice(vpRobot, cloneVoices: true, cloneSteps: vpSteps);
+
+    Console.WriteLine($"cloned voices available: {(vpVoice.ClonedCharacters.Count == 0 ? "(none)" : string.Join(", ", vpVoice.ClonedCharacters))}");
+    var cloned = vpVoice.ClonedCharacters.Contains(who.Name);
+    Console.WriteLine($"  [{(cloned ? "PASS" : "FAIL")}] {who.Name} has a reference clip"
+                    + (cloned ? "" : "  -> run --candidates / --audition and --pick first"));
+    if (!cloned) return 1;
+
+    var line = args.FirstOrDefault(a => a.StartsWith("--say="))?["--say=".Length..]
+               ?? "Oh gosh, hi Aubs. Um, do you want to hang out for a bit?";
+
+    var swFirst = System.Diagnostics.Stopwatch.StartNew();
+    var first = await vpVoice.PrepareAsync(line, who);
+    swFirst.Stop();
+    Console.WriteLine($"  first prepare: {swFirst.Elapsed.TotalSeconds:F1}s for {first.Duration.TotalSeconds:F1}s of audio"
+                    + $"  ({first.Duration.TotalSeconds / Math.Max(swFirst.Elapsed.TotalSeconds, 0.001):F2}x real time)");
+    var renderedOk = !first.IsEmpty && first.Duration > TimeSpan.Zero;
+    Console.WriteLine($"  [{(renderedOk ? "PASS" : "FAIL")}] line rendered and uploaded");
+
+    var swSecond = System.Diagnostics.Stopwatch.StartNew();
+    var second = await vpVoice.PrepareAsync(line, who);
+    swSecond.Stop();
+    var cacheOk = second.SoundName == first.SoundName && swSecond.Elapsed < TimeSpan.FromMilliseconds(250);
+    Console.WriteLine($"  [{(cacheOk ? "PASS" : "FAIL")}] same line served from cache"
+                    + $" ({swSecond.Elapsed.TotalMilliseconds:F0}ms, same clip: {second.SoundName == first.SoundName})");
+
+    // The first render pays for warming the model up. What decides whether she can
+    // hold a conversation is the SECOND, different line - so measure that separately
+    // rather than quoting a cold number that flatters nothing.
+    var warmLine = "Hehe, um, okay. That sounds really nice, actually.";
+    var swWarm = System.Diagnostics.Stopwatch.StartNew();
+    var warm = await vpVoice.PrepareAsync(warmLine, who, bypassCache: true);
+    swWarm.Stop();
+    var ratio = warm.Duration.TotalSeconds / Math.Max(swWarm.Elapsed.TotalSeconds, 0.001);
+    Console.WriteLine($"  warm prepare:  {swWarm.Elapsed.TotalSeconds:F1}s for {warm.Duration.TotalSeconds:F1}s of audio  ({ratio:F2}x real time)");
+    var warmOk = ratio >= 1.0;
+    Console.WriteLine($"  [{(warmOk ? "PASS" : "WARN")}] renders faster than real time"
+                    + (warmOk ? "" : "  -> lower --steps, or pre-generate her fixed lines"));
+
+    if (!silent)
+    {
+        Console.WriteLine($"  playing on Rose: \"{line}\"");
+        await vpVoice.PlayAsync(first);
+    }
+
+    var pass = renderedOk && cacheOk;
+    Console.WriteLine($"\n{(pass ? "PASS" : "FAIL")} - voiceprint path {(pass ? "works end to end" : "has a failure above")}");
+    return pass ? 0 : 1;
 }
 
 if (args.Contains("--test-speech"))

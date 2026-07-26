@@ -18,6 +18,26 @@ public sealed class RoseVoice : IDisposable
     private readonly ReachyMiniClient _rose;
     private readonly Dictionary<string, KokoroVoice> _voices = [];
 
+    /// <summary>The show-voice cloner, or null when running on Kokoro voices alone.</summary>
+    private readonly RoseVoiceClone? _clone;
+
+    /// <summary>Reference clip + its exact transcript, per character that has one.</summary>
+    private readonly Dictionary<string, (float[] Samples, int Rate, string Text)> _voiceprints = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Lines already synthesised and uploaded this session, by content.</summary>
+    private readonly Dictionary<string, PreparedSpeech> _prepared = [];
+
+    /// <summary>Sound names the robot already holds, so a known line is never re-uploaded.</summary>
+    private HashSet<string>? _onRobot;
+
+    private readonly string? _cacheDir;
+
+    /// <summary>Sample rate of Kokoro-82M's output.</summary>
+    private const int KokoroRate = 24000;
+
+    /// <summary>Characters that will speak in their own show voice rather than a Kokoro voice.</summary>
+    public IReadOnlyCollection<string> ClonedCharacters => _voiceprints.Keys;
+
     /// <summary>
     /// Peak target after normalisation. Just under full scale, leaving a little
     /// room so the robot's own DAC does not clip on inter-sample peaks.
@@ -33,10 +53,71 @@ public sealed class RoseVoice : IDisposable
     private const float CompressionRatio = 3.0f;
     private const float CompressorThreshold = 0.25f;
 
-    public RoseVoice(ReachyMiniClient rose, string? modelPath = null)
+    /// <param name="rose">The robot the audio comes out of.</param>
+    /// <param name="modelPath">Explicit path to kokoro.onnx, or null to discover it.</param>
+    /// <param name="cloneVoices">
+    /// Speak as the actual show characters, for every character that has a reference
+    /// clip in models/voiceprints. Characters without one keep their Kokoro voice, so
+    /// this degrades to the old behaviour rather than failing.
+    /// </param>
+    /// <param name="cloneSteps">
+    /// Flow-matching steps for the cloner. The default is 4 because that is what the
+    /// distill model is trained for and, measured on this machine, it renders FASTER
+    /// than real time (2.3s of compute for 3.4s of speech) - which is what makes a
+    /// cloned voice usable in a live conversation at all. 16 steps costs 9.9s for the
+    /// same line: fine for pre-generating fixed lines, far too slow to talk to.
+    /// </param>
+    /// <param name="fp32">Full-precision cloner. int8 is faster but leaves an echo tinge.</param>
+    public RoseVoice(ReachyMiniClient rose, string? modelPath = null,
+                     bool cloneVoices = false, int cloneSteps = 4, bool fp32 = true)
     {
         _rose = rose;
         _synth = new KokoroWavSynthesizer(modelPath ?? ResolveModelPath());
+
+        if (!cloneVoices) return;
+
+        var modelDir = ResolveModelDir();
+        if (modelDir is null) return;
+
+        _cacheDir = Path.Combine(modelDir, "voicecache");
+        LoadVoiceprints(Path.Combine(modelDir, "voiceprints"));
+        if (_voiceprints.Count > 0)
+            _clone = new RoseVoiceClone(modelDir, fp32, cloneSteps);
+    }
+
+    /// <summary>
+    /// Loads every reference clip on disk. A character without one simply is not in
+    /// the dictionary and falls back to Kokoro.
+    /// </summary>
+    private void LoadVoiceprints(string dir)
+    {
+        if (!Directory.Exists(dir)) return;
+
+        foreach (var c in CharacterLibrary.All)
+        {
+            var wav = Path.Combine(dir, $"{c.Name}.wav");
+            var txt = Path.Combine(dir, $"{c.Name}.txt");
+            if (!File.Exists(wav) || !File.Exists(txt)) continue;
+
+            var (samples, rate) = ShowAudio.ReadWav(wav);
+            var text = File.ReadAllText(txt).Trim();
+
+            // A reference whose transcript does not match its audio makes the cloner
+            // leak the unaccounted-for words into every line it speaks, so an empty or
+            // missing transcript is skipped rather than guessed at.
+            if (samples.Length > 0 && text.Length > 0)
+                _voiceprints[c.Name] = (samples, rate, text);
+        }
+    }
+
+    private static string? ResolveModelDir()
+    {
+        for (var d = new DirectoryInfo(AppContext.BaseDirectory); d is not null; d = d.Parent)
+        {
+            var models = Path.Combine(d.FullName, "models");
+            if (Directory.Exists(models)) return models;
+        }
+        return null;
     }
 
     /// <summary>
@@ -119,29 +200,142 @@ public sealed class RoseVoice : IDisposable
     /// current one is still being spoken. Playing is near-instant once prepared, so
     /// this is what keeps multi-sentence replies gapless without overlapping them.
     /// </remarks>
-    public async Task<PreparedSpeech> PrepareAsync(string text, Character character, CancellationToken ct = default)
+    /// <param name="bypassCache">
+    /// Render even if this exact line is already prepared. Only for measuring what a
+    /// fresh render costs - a timing test that silently returns a cached clip reports
+    /// a speed the conversation will never actually see.
+    /// </param>
+    public async Task<PreparedSpeech> PrepareAsync(string text, Character character, CancellationToken ct = default, bool bypassCache = false)
     {
         if (string.IsNullOrWhiteSpace(text)) return default;
 
-        var pcm = await _synth.SynthesizeAsync(text, GetVoice(character.Voice));
+        // Named by content, not by a GUID. Cloned synthesis is slow and CPU-bound, so
+        // the same line said twice must cost nothing the second time - and a stable
+        // name means a line pre-generated in an earlier session is still on the robot
+        // and still usable, which is what keeps a greeting instant.
+        var key = ContentKey(text, character);
+        if (!bypassCache)
+        {
+            if (_prepared.TryGetValue(key, out var cached)) return cached;
+
+            if (await AlreadyOnRobotAsync($"rose_{key}.wav", key, ct) is { } known)
+            {
+                _prepared[key] = known;
+                return known;
+            }
+        }
+
+        var soundName = $"rose_{key}.wav";
+
+        var (pcm, rate) = await RenderAsync(text, character, ct);
+        if (pcm.Length == 0) return default;
         if (NormalizeLoudness) Loudify(pcm);
 
-        var temp = Path.Combine(Path.GetTempPath(), $"rose_{Guid.NewGuid():N}.wav");
+        var wav = BuildWav(pcm, rate);
+        using var ms = new MemoryStream(wav);
+        await _rose.UploadSoundAsync(soundName, ms, ct);
+
+        var prepared = new PreparedSpeech(soundName, TimeSpan.FromSeconds(pcm.Length / 2.0 / rate));
+        _prepared[key] = prepared;
+        _onRobot?.Add(soundName);
+        RememberDuration(key, prepared.Duration);
+        return prepared;
+    }
+
+    /// <summary>
+    /// Renders a line, in the character's own show voice when we have a reference for
+    /// them, otherwise in their Kokoro voice.
+    /// </summary>
+    /// <remarks>
+    /// The cloner is synchronous and CPU-bound, so it runs off the calling thread -
+    /// otherwise it would block the conversation loop's own timers while it works.
+    /// Falling back to Kokoro rather than throwing matters: a character whose
+    /// reference has not been chosen yet should still talk to Aubs.
+    /// </remarks>
+    private async Task<(byte[] Pcm, int Rate)> RenderAsync(string text, Character character, CancellationToken ct)
+    {
+        if (_clone is not null && _voiceprints.TryGetValue(character.Name, out var vp))
+        {
+            var pcm = await Task.Run(() => _clone.Clone(text, vp.Samples, vp.Rate, vp.Text), ct);
+            return (pcm, _clone.SampleRate);
+        }
+
+        return (await _synth.SynthesizeAsync(text, GetVoice(character.Voice)), KokoroRate);
+    }
+
+    /// <summary>A stable short name for this exact line in this exact voice.</summary>
+    private string ContentKey(string text, Character character)
+    {
+        var voice = _voiceprints.ContainsKey(character.Name) ? $"clone:{character.Name}" : $"kokoro:{character.Voice}";
+        var bytes = System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes($"{voice}|{NormalizeLoudness}|{text.Trim()}"));
+        return Convert.ToHexString(bytes)[..16].ToLowerInvariant();
+    }
+
+    /// <summary>
+    /// The prepared line if the robot already holds it from an earlier session.
+    /// </summary>
+    /// <remarks>
+    /// Playback needs the clip's duration (that is how non-overlap is enforced), and
+    /// re-synthesising just to measure it would defeat the point, so durations are
+    /// written next to the cache key when a line is first made.
+    /// </remarks>
+    private async Task<PreparedSpeech?> AlreadyOnRobotAsync(string soundName, string key, CancellationToken ct)
+    {
+        var known = RecallDuration(key);
+        if (known is null) return null;
+
+        if (_onRobot is null)
+        {
+            try
+            {
+                var listed = await _rose.ListSoundsAsync(ct);
+                _onRobot = listed is null
+                    ? []
+                    : new HashSet<string>(listed.Values.SelectMany(v => v), StringComparer.OrdinalIgnoreCase);
+            }
+            catch { _onRobot = []; }   // if we cannot tell, just re-upload
+        }
+
+        return _onRobot.Contains(soundName) ? new PreparedSpeech(soundName, known.Value) : null;
+    }
+
+    private void RememberDuration(string key, TimeSpan duration)
+    {
+        if (_cacheDir is null) return;
         try
         {
-            _synth.SaveAudioToFile(pcm, temp);
-            var wav = await File.ReadAllBytesAsync(temp, ct);
-
-            var name = Path.GetFileName(temp);
-            using var ms = new MemoryStream(wav);
-            await _rose.UploadSoundAsync(name, ms, ct);
-
-            return new PreparedSpeech(name, WavDuration(wav));
+            Directory.CreateDirectory(_cacheDir);
+            File.WriteAllText(Path.Combine(_cacheDir, $"{key}.txt"), duration.TotalSeconds.ToString("R"));
         }
-        finally
+        catch { /* the cache is an optimisation, never a requirement */ }
+    }
+
+    private TimeSpan? RecallDuration(string key)
+    {
+        if (_cacheDir is null) return null;
+        try
         {
-            if (File.Exists(temp)) File.Delete(temp);
+            var path = Path.Combine(_cacheDir, $"{key}.txt");
+            if (File.Exists(path) && double.TryParse(File.ReadAllText(path), out var seconds))
+                return TimeSpan.FromSeconds(seconds);
         }
+        catch { /* fall through and re-synthesise */ }
+        return null;
+    }
+
+    /// <summary>Wraps raw 16-bit mono PCM in a RIFF header at the given rate.</summary>
+    private static byte[] BuildWav(byte[] pcm, int rate)
+    {
+        using var ms = new MemoryStream(44 + pcm.Length);
+        using (var w = new BinaryWriter(ms, System.Text.Encoding.UTF8, leaveOpen: true))
+        {
+            w.Write("RIFF"u8); w.Write(36 + pcm.Length); w.Write("WAVE"u8);
+            w.Write("fmt "u8); w.Write(16); w.Write((short)1); w.Write((short)1);
+            w.Write(rate); w.Write(rate * 2); w.Write((short)2); w.Write((short)16);
+            w.Write("data"u8); w.Write(pcm.Length); w.Write(pcm);
+        }
+        return ms.ToArray();
     }
 
     /// <summary>
@@ -284,5 +478,9 @@ public sealed class RoseVoice : IDisposable
         return true;
     }
 
-    public void Dispose() => _synth?.Dispose();
+    public void Dispose()
+    {
+        _synth?.Dispose();
+        _clone?.Dispose();
+    }
 }
