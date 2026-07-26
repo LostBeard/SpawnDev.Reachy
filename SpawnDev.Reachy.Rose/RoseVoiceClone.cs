@@ -37,12 +37,29 @@ public sealed class RoseVoiceClone : IDisposable
     /// <summary>The fp32 package - higher quality, but shipped without a lexicon (copy one in).</summary>
     private const string Fp32Name = "sherpa-onnx-zipvoice-distill-zh-en-emilia";
 
+    /// <summary>
+    /// The onnxruntime execution provider actually requested ("cpu" or "cuda").
+    /// The GPU path runs the ZipVoice ONNX graph on the RTX card, cutting a line
+    /// from ~9s to a fraction of a second. sherpa falls back to CPU on its own if
+    /// the CUDA provider is not available in the loaded onnxruntime.dll, so asking
+    /// for "cuda" is always safe - it just does nothing on a CPU-only build.
+    /// </summary>
+    public string Provider { get; }
+
     /// <param name="modelDir">Folder holding the ZipVoice model package(s).</param>
     /// <param name="fp32">Use the full-precision model instead of int8 - less quantization artifact.</param>
     /// <param name="numSteps">Flow-matching steps; more trades time for quality.</param>
-    public RoseVoiceClone(string modelDir, bool fp32 = false, int numSteps = 4)
+    /// <param name="provider">
+    /// onnxruntime execution provider: "cpu" (default) or "cuda". "cuda" needs the
+    /// CUDA-13 onnxruntime.dll + providers in the output and cuDNN 9 reachable (see
+    /// gpu-setup/GPU-SETUP.md); when those are absent sherpa logs the available
+    /// providers and quietly runs on CPU, so nothing breaks.
+    /// </param>
+    public RoseVoiceClone(string modelDir, bool fp32 = false, int numSteps = 4, string provider = "cpu")
     {
+        if (provider == "cuda") EnsureCudaLibrariesFindable();
         NumSteps = numSteps;
+        Provider = provider;
         var dir = Path.Combine(modelDir, fp32 ? Fp32Name : Int8Name);
         var config = new OfflineTtsConfig();
         config.Model.ZipVoice.Tokens = Path.Combine(dir, "tokens.txt");
@@ -52,9 +69,41 @@ public sealed class RoseVoiceClone : IDisposable
         config.Model.ZipVoice.Vocoder = ResolveVocoder(modelDir, dir);
         config.Model.ZipVoice.DataDir = Path.Combine(dir, "espeak-ng-data");
         config.Model.ZipVoice.Lexicon = Path.Combine(dir, "lexicon.txt");
-        config.Model.NumThreads = Math.Max(1, Environment.ProcessorCount / 2);
-        config.Model.Provider = "cpu";
+        // On GPU the flow-matching runs on the card, not the thread pool, so pinning
+        // half the cores would only steal them from the rest of the pipeline.
+        config.Model.NumThreads = provider == "cuda" ? 2 : Math.Max(1, Environment.ProcessorCount / 2);
+        config.Model.Provider = provider;
+        // 1 = warnings+errors, so sherpa prints its "Available providers ... " line and
+        // we can SEE whether CUDA actually engaged instead of assuming it did.
+        config.Model.Debug = provider == "cuda" ? 1 : 0;
         _tts = new OfflineTts(config);
+    }
+
+    private static bool _cudaPathReady;
+
+    /// <summary>
+    /// Puts the app's native-library folder on the process DLL search path so the
+    /// CUDA execution provider can find cuDNN.
+    /// </summary>
+    /// <remarks>
+    /// onnxruntime 1.27 loads cuDNN dynamically by bare name ("cudnn64_9.dll"), and
+    /// the OS default search covers the exe folder and PATH but NOT the
+    /// runtimes/win-x64/native subfolder where the GPU onnxruntime + its cuDNN live.
+    /// cuBLAS is found because the CUDA toolkit's bin is on PATH; cuDNN is not, so
+    /// without this the provider fails with "Cannot load symbol cudnnCreate" and
+    /// silently falls back to CPU. Prepending the native folder to PATH fixes it
+    /// without disturbing how anything else resolves. cuDNN 9 also delay-loads
+    /// zlibwapi.dll, which lives in the same folder. See gpu-setup/GPU-SETUP.md.
+    /// </remarks>
+    private static void EnsureCudaLibrariesFindable()
+    {
+        if (_cudaPathReady) return;
+        _cudaPathReady = true;
+        var nativeDir = Path.Combine(AppContext.BaseDirectory, "runtimes", "win-x64", "native");
+        if (!Directory.Exists(nativeDir)) return;
+        var path = Environment.GetEnvironmentVariable("PATH") ?? "";
+        if (!path.Split(Path.PathSeparator).Any(p => string.Equals(p.TrimEnd('\\'), nativeDir.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase)))
+            Environment.SetEnvironmentVariable("PATH", nativeDir + Path.PathSeparator + path);
     }
 
     private static string ResolveVocoder(string modelDir, string dir)

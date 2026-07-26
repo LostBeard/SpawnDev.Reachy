@@ -68,8 +68,15 @@ public sealed class RoseVoice : IDisposable
     /// it and let the cache serve it.
     /// </param>
     /// <param name="fp32">Full-precision cloner. int8 is faster but leaves an echo tinge.</param>
+    /// <param name="cloneProvider">
+    /// onnxruntime execution provider for the cloner: "cuda" runs ZipVoice on the GPU
+    /// (~9s/line becomes a fraction of a second), "cpu" keeps it on the processor.
+    /// Safe to ask for "cuda" always - sherpa falls back to CPU when the CUDA stack is
+    /// not present (see gpu-setup/GPU-SETUP.md).
+    /// </param>
     public RoseVoice(ReachyMiniClient rose, string? modelPath = null,
-                     bool cloneVoices = false, int cloneSteps = 16, bool fp32 = true)
+                     bool cloneVoices = false, int cloneSteps = 16, bool fp32 = true,
+                     string cloneProvider = "cuda")
     {
         _rose = rose;
         _synth = new KokoroWavSynthesizer(modelPath ?? ResolveModelPath());
@@ -83,7 +90,7 @@ public sealed class RoseVoice : IDisposable
         LoadVoiceprints(Path.Combine(modelDir, "voiceprints"));
         if (_voiceprints.Count > 0)
         {
-            _clone = new RoseVoiceClone(modelDir, fp32, cloneSteps);
+            _clone = new RoseVoiceClone(modelDir, fp32, cloneSteps, cloneProvider);
             // Guard every live render against the zero-shot gender drift that made N
             // switch to a female voice mid-conversation. Diagnostics leave this off to
             // measure the raw drift; the conversation must never expose it to Aubs.

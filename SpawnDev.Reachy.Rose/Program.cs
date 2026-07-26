@@ -222,8 +222,9 @@ if (args.Contains("--test-clone"))
 
     var fp32 = args.Contains("--fp32");
     var steps = int.TryParse(args.FirstOrDefault(a => a.StartsWith("--steps="))?["--steps=".Length..], out var st) ? st : 4;
-    Console.WriteLine($"model: {(fp32 ? "fp32" : "int8")}, steps: {steps}");
-    using var clone = new RoseVoiceClone(md, fp32, steps);
+    var provider = args.Contains("--gpu") || args.Contains("--cuda") ? "cuda" : "cpu";
+    Console.WriteLine($"model: {(fp32 ? "fp32" : "int8")}, steps: {steps}, provider: {provider}");
+    using var clone = new RoseVoiceClone(md, fp32, steps, provider);
     var sw = System.Diagnostics.Stopwatch.StartNew();
     var pcm = clone.Clone(say, refSamples, refRate, refText);
     Console.WriteLine($"said:  \"{say}\"\ngenerated {pcm.Length / 2 / (double)clone.SampleRate:F1}s in {sw.Elapsed.TotalSeconds:F1}s");
@@ -1003,11 +1004,13 @@ if (args.Contains("--test-voiceprints"))
     var vpName = args.FirstOrDefault(a => a.StartsWith("--name="))?["--name=".Length..] ?? "N";
     var silent = args.Contains("--no-play");
 
+    var vpProvider = args.Contains("--cpu") ? "cpu" : "cuda";
     var who = CharacterLibrary.Find(vpName);
     if (who is null) { Console.WriteLine($"unknown character '{vpName}'"); return 1; }
 
+    Console.WriteLine($"provider: {vpProvider}");
     using var vpRobot = new ReachyMiniClient(vpIp);
-    using var vpVoice = new RoseVoice(vpRobot, cloneVoices: true, cloneSteps: vpSteps);
+    using var vpVoice = new RoseVoice(vpRobot, cloneVoices: true, cloneSteps: vpSteps, cloneProvider: vpProvider);
 
     Console.WriteLine($"cloned voices available: {(vpVoice.ClonedCharacters.Count == 0 ? "(none)" : string.Join(", ", vpVoice.ClonedCharacters))}");
     var cloned = vpVoice.ClonedCharacters.Contains(who.Name);

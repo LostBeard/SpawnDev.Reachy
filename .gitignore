@@ -16,3 +16,8 @@ md_audio/
 
 # ASR + VAD models, fetched separately (~250MB)
 models/
+
+# GPU runtime: cuDNN 9 for CUDA 13 (~540MB) + its installer (~1.2GB).
+# Reproduce with gpu-setup/GPU-SETUP.md; never commit the binaries.
+SpawnDev.Reachy.Rose/gpu-runtime/
+gpu-setup/*.zip

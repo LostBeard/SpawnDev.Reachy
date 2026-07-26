@@ -10,6 +10,14 @@
     <PackageReference Include="NAudio" Version="2.3.0" />
     <PackageReference Include="org.k2fsa.sherpa.onnx" Version="1.13.4" />
     <PackageReference Include="org.k2fsa.sherpa.onnx.runtime.win-x64" Version="1.13.4" />
+    <!--
+      GPU execution provider for ZipVoice. sherpa's c-api (1.13.4) is ABI-linked to
+      onnxruntime 1.27.0; Microsoft's 1.27.0 GPU build is a CUDA-13 build, matching
+      TJ's installed CUDA 13.2. This swaps sherpa's CPU onnxruntime.dll for the CUDA
+      one so Provider="cuda" runs the flow-matching on the RTX card. See the targets
+      below and gpu-setup/GPU-SETUP.md.
+    -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.Gpu.Windows" Version="1.27.0" GeneratePathProperty="true" />
     <PackageReference Include="SileroVad" Version="1.3.0" />
     <PackageReference Include="SpawnDev.SIPSorcery" Version="10.0.7" />
     <PackageReference Include="SSH.NET" Version="2024.2.0" />
@@ -23,5 +31,38 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
+
+  <!--
+    sherpa's win-x64 runtime package AND Microsoft's GPU package both ship
+    runtimes/win-x64/native/onnxruntime.dll at 1.27.0, so nuget's conflict
+    resolution can land either. sherpa's is CPU-only. Force Microsoft's CUDA-13
+    build (and its providers_shared / providers_cuda) to win, so the CUDA EP is
+    actually available for Provider="cuda". Runs after the normal copy so it
+    overwrites whatever landed; keeps sherpa-onnx-c-api.dll untouched.
+  -->
+  <Target Name="ForceGpuOnnxRuntime" AfterTargets="Build">
+    <ItemGroup>
+      <_GpuOrt Include="$(PkgMicrosoft_ML_OnnxRuntime_Gpu_Windows)\runtimes\win-x64\native\*.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_GpuOrt)" DestinationFolder="$(OutDir)runtimes\win-x64\native"
+          OverwriteReadOnlyFiles="true" SkipUnchangedFiles="true" />
+    <Message Importance="high" Text="[Rose] GPU onnxruntime (CUDA 13) forced into $(OutDir)runtimes\win-x64\native over sherpa's CPU build." />
+  </Target>
+
+  <!--
+    cuDNN 9 for CUDA 13 - the only piece not already on the machine. Kept in
+    gpu-runtime/cudnn (gitignored, ~540MB) and copied next to onnxruntime so the
+    CUDA EP finds it. No-ops on a machine without the folder. To reproduce the
+    folder on another PC, run gpu-setup/GPU-SETUP.md's one step.
+  -->
+  <Target Name="CopyCudnn" AfterTargets="Build"
+          Condition="Exists('$(MSBuildProjectDirectory)\gpu-runtime\cudnn')">
+    <ItemGroup>
+      <_Cudnn Include="$(MSBuildProjectDirectory)\gpu-runtime\cudnn\*.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_Cudnn)" DestinationFolder="$(OutDir)runtimes\win-x64\native"
+          OverwriteReadOnlyFiles="true" SkipUnchangedFiles="true" />
+    <Message Importance="high" Text="[Rose] cuDNN 9 (CUDA 13) copied next to onnxruntime." />
+  </Target>
 
 </Project>
