@@ -82,7 +82,13 @@ public sealed class RoseVoice : IDisposable
         _cacheDir = Path.Combine(modelDir, "voicecache");
         LoadVoiceprints(Path.Combine(modelDir, "voiceprints"));
         if (_voiceprints.Count > 0)
+        {
             _clone = new RoseVoiceClone(modelDir, fp32, cloneSteps);
+            // Guard every live render against the zero-shot gender drift that made N
+            // switch to a female voice mid-conversation. Diagnostics leave this off to
+            // measure the raw drift; the conversation must never expose it to Aubs.
+            _clone.StabilizePitch = true;
+        }
     }
 
     /// <summary>

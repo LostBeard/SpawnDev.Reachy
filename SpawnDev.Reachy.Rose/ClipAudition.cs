@@ -183,6 +183,161 @@ public static class ClipAudition
         return 0;
     }
 
+    /// <summary>
+    /// Measures how STABLY a reference clones, not just how it sounds on one line.
+    /// </summary>
+    /// <remarks>
+    /// Zero-shot ZipVoice re-samples random noise for every call, so a reference whose
+    /// speaker sits near the male/female line - N is soft and fairly high - can drift
+    /// gender from one sentence to the next and snap back on the following one. That is
+    /// invisible when you audition a single fixed line, and it is exactly what breaks a
+    /// live conversation. So this clones a spread of short and long sentences through
+    /// each candidate reference and reports the pitch (median f0) of every output: a
+    /// stable reference holds one pitch, an unstable one scatters.
+    ///
+    /// Candidates: the currently installed voiceprint, every reel clip, and a few
+    /// concatenations (a longer reference carries more speaker evidence, which is the
+    /// standard cure for zero-shot drift). The winner is the one with the lowest pitch
+    /// spread that stays in range - measured, so the choice is not another guess.
+    /// </remarks>
+    public static async Task<int> StabilityAsync(string[] args)
+    {
+        var name = ShowAudio.ArgValue(args, "--name=") ?? "N";
+        var fp32 = !args.Contains("--int8");
+        var steps = Int(args, "--steps=", 16);
+        var install = args.Contains("--install");
+        var guard = args.Contains("--guard");            // apply the pitch-stabilising re-roll
+        var only = ShowAudio.ArgValue(args, "--only=");   // test just one reference by label
+
+        var solution = ShowAudio.SolutionDir();
+        var modelDir = Path.Combine(solution, "models");
+        var reelDir = Path.Combine(solution, "scratchpad", "candidates", $"{name}_yt");
+        var vpDir = Path.Combine(solution, "models", "voiceprints");
+        var outDir = Path.Combine(solution, "scratchpad", "candidates", $"{name}_stability");
+        Directory.CreateDirectory(outDir);
+
+        // Short lines stress the clone hardest - the less text there is, the less the
+        // model has to pin the speaker down, so drift shows up here first.
+        string[] sentences =
+        [
+            "Yeah, okay!",
+            "Oh gosh, I don't know about that.",
+            "Do you want to hang out for a bit?",
+            "Hmm, let me think about it.",
+            "I'm not scary, I promise!",
+            "We could totally be friends, if you want.",
+            "Wait, what was that?",
+            "That sounds really nice, actually.",
+        ];
+
+        // Build the candidate reference list: the live voiceprint, each reel clip, and
+        // concatenations of the first few reel clips for stronger anchoring.
+        var refs = new List<(string Label, float[] Audio, string Text)>();
+
+        var liveWav = Path.Combine(vpDir, $"{name}.wav");
+        var liveTxt = Path.Combine(vpDir, $"{name}.txt");
+        if (File.Exists(liveWav) && File.Exists(liveTxt))
+            refs.Add(("installed", ShowAudio.ReadWav(liveWav).Samples, File.ReadAllText(liveTxt).Trim()));
+
+        var reel = new List<(float[] Audio, string Text, string Tag)>();
+        if (Directory.Exists(reelDir))
+        {
+            foreach (var wav in Directory.GetFiles(reelDir, $"{name}_yt_*_ref.wav").OrderBy(f => f))
+            {
+                var txt = Path.ChangeExtension(wav, ".txt");
+                if (!File.Exists(txt)) continue;
+                var tag = Path.GetFileNameWithoutExtension(wav).Replace("_ref", "");
+                var a = ShowAudio.ReadWav(wav).Samples;
+                reel.Add((a, File.ReadAllText(txt).Trim(), tag));
+                refs.Add((tag, a, File.ReadAllText(txt).Trim()));
+            }
+        }
+
+        // Concatenations: a longer reference is the standard cure for drift. Join the
+        // first few reel clips with a short silence between them, audio and text in the
+        // same order so the two stay aligned.
+        if (reel.Count >= 2)
+        {
+            refs.Add(BuildConcat("concat[1+2]", reel.Take(2)));
+            if (reel.Count >= 3) refs.Add(BuildConcat("concat[1+2+3]", reel.Take(3)));
+        }
+
+        if (only is not null)
+            refs = refs.Where(r => r.Label.Contains(only, StringComparison.OrdinalIgnoreCase)).ToList();
+
+        if (refs.Count == 0) { Console.WriteLine($"no references for {name} - run --audition-clips first"); return 1; }
+
+        Console.WriteLine($"Clone-stability for {name}: {sentences.Length} sentences x {refs.Count} reference(s) ({(fp32 ? "fp32" : "int8")}, {steps} steps{(guard ? ", pitch guard ON" : "")}).\n");
+
+        using var voice = new RoseVoiceClone(modelDir, fp32, steps) { StabilizePitch = guard };
+        var scored = new List<(string Label, double MeanF0, double StdF0, int OutOfRange, float[] Audio, string Text)>();
+
+        foreach (var (label, audio, text) in refs)
+        {
+            var f0s = new List<double>();
+            foreach (var s in sentences)
+            {
+                var pcm = voice.Clone(s, audio, ShowAudio.Rate, text);
+                var samples = PcmToFloat(pcm);
+                var f = AudioAnalysis.Measure(samples, voice.SampleRate);
+                f0s.Add(f.MedianF0);
+            }
+
+            var mean = f0s.Average();
+            var std = Math.Sqrt(f0s.Sum(x => (x - mean) * (x - mean)) / f0s.Count);
+            // A clone that drifts female shows up as an output whose pitch jumps well
+            // above the reference's own male range. Flag anything past 205 Hz.
+            var drift = f0s.Count(x => x > 205);
+
+            scored.Add((label, mean, std, drift, audio, text));
+            Console.WriteLine($"  {label,-14}  meanF0 {mean,5:F0}Hz  spread +-{std,4:F0}Hz  drifted {drift}/{sentences.Length}"
+                            + $"   [{string.Join(" ", f0s.Select(x => $"{x:F0}"))}]");
+        }
+
+        // Best = fewest drifted sentences, then tightest spread. A reference that never
+        // crosses into the female range and holds one pitch is what keeps N sounding
+        // like N for a whole conversation.
+        var best = scored.OrderBy(s => s.OutOfRange).ThenBy(s => s.StdF0).First();
+        Console.WriteLine($"\nMost stable: {best.Label}  (meanF0 {best.MeanF0:F0}Hz, spread +-{best.StdF0:F0}Hz, {best.OutOfRange} drift)");
+
+        if (install)
+        {
+            ShowAudio.WriteWav(liveWav, best.Audio);
+            File.WriteAllText(liveTxt, best.Text);
+            Console.WriteLine($"installed {best.Label} as {name}'s live voiceprint.");
+            Console.WriteLine($"  \"{Truncate(best.Text, 90)}\"");
+        }
+        else
+        {
+            Console.WriteLine($"Re-run with --install to make it {name}'s live voice.");
+        }
+        return 0;
+    }
+
+    private static (string, float[], string) BuildConcat(string label, IEnumerable<(float[] Audio, string Text, string Tag)> parts)
+    {
+        var gap = new float[ShowAudio.Rate / 5];   // 200 ms of silence between clips
+        var audio = new List<float>();
+        var texts = new List<string>();
+        var first = true;
+        foreach (var p in parts)
+        {
+            if (!first) audio.AddRange(gap);
+            audio.AddRange(p.Audio);
+            texts.Add(p.Text);
+            first = false;
+        }
+        return (label, audio.ToArray(), string.Join(" ", texts));
+    }
+
+    private static float[] PcmToFloat(byte[] pcm)
+    {
+        var samples = new float[pcm.Length / 2];
+        for (var i = 0; i < samples.Length; i++)
+            samples[i] = (short)(pcm[i * 2] | (pcm[i * 2 + 1] << 8)) / 32768f;
+        return samples;
+    }
+
     // ---- segmentation -------------------------------------------------------
 
     /// <summary>

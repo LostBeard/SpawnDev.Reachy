@@ -77,13 +77,67 @@ public sealed class RoseVoiceClone : IDisposable
     /// <param name="reference">Reference audio, mono float samples in [-1,1].</param>
     /// <param name="referenceSampleRate">Sample rate of the reference audio.</param>
     /// <param name="referenceText">Exact transcript of the reference audio.</param>
+    /// <summary>
+    /// Re-roll a render whose pitch drifted out of the reference speaker's range.
+    /// </summary>
+    /// <remarks>
+    /// Zero-shot ZipVoice re-samples random noise for every call, so a reference whose
+    /// speaker sits near the male/female line - N is soft and fairly high - occasionally
+    /// renders a sentence in the wrong gender and the next one back in the right one.
+    /// A single reference cannot eliminate this (measured: every candidate drifts at
+    /// least once in eight), so the fix is here: after a render, measure its pitch, and
+    /// if it fell outside the reference's own f0 band, render again. A drift is
+    /// uncommon and a re-roll almost always lands in range, so the average cost is small
+    /// and N stops changing gender mid-conversation. Off by default so the diagnostics
+    /// can still see the raw drift.
+    /// </remarks>
+    public bool StabilizePitch { get; set; }
+
+    /// <summary>How many times to re-roll a drifted render before keeping the closest.</summary>
+    public int MaxRerolls { get; set; } = 4;
+
     public byte[] Clone(string text, float[] reference, int referenceSampleRate, string referenceText, float speed = 1.0f)
+    {
+        // A quarter second of trailing silence so the model does not carry the last
+        // reference word into the start of the generated line. Done once, not per roll.
+        var padded = PadTail(reference, referenceSampleRate / 4);
+
+        if (!StabilizePitch)
+            return GenerateOnce(text, padded, referenceSampleRate, referenceText, speed).Pcm;
+
+        // Anchor to the reference speaker's own pitch rather than a hand-set gender
+        // threshold, so this self-calibrates: a male reference rejects a female render
+        // and a female reference rejects a male one, with no per-character tuning.
+        var refF0 = AudioAnalysis.Measure(reference, referenceSampleRate).MedianF0;
+        if (refF0 <= 0)
+            return GenerateOnce(text, padded, referenceSampleRate, referenceText, speed).Pcm;
+
+        // Asymmetric: generous below (normal male variation dips low) and tighter above,
+        // because the drift that matters is upward into the female range. Relative to
+        // the reference's own pitch, so it self-calibrates and never rejects a female
+        // character's legitimately high render.
+        var lo = refF0 - 70;
+        var hi = refF0 + 35;
+
+        byte[] best = [];
+        var bestDist = double.MaxValue;
+        for (var attempt = 0; attempt <= MaxRerolls; attempt++)
+        {
+            var (pcm, samples) = GenerateOnce(text, padded, referenceSampleRate, referenceText, speed);
+            var f0 = AudioAnalysis.Measure(samples, SampleRate).MedianF0;
+            if (f0 >= lo && f0 <= hi) return pcm;
+
+            var dist = f0 < lo ? lo - f0 : f0 - hi;
+            if (dist < bestDist) { bestDist = dist; best = pcm; }
+        }
+        return best;   // every roll drifted; keep the one closest to the speaker's range
+    }
+
+    private (byte[] Pcm, float[] Samples) GenerateOnce(string text, float[] paddedReference, int referenceSampleRate, string referenceText, float speed)
     {
         var gen = new OfflineTtsGenerationConfig
         {
-            // A quarter second of trailing silence so the model does not carry the
-            // last reference word into the start of the generated line.
-            ReferenceAudio = PadTail(reference, referenceSampleRate / 4),
+            ReferenceAudio = paddedReference,
             ReferenceSampleRate = referenceSampleRate,
             ReferenceText = referenceText,
             NumSteps = NumSteps,
@@ -100,7 +154,7 @@ public sealed class RoseVoiceClone : IDisposable
             pcm[i * 2] = (byte)v;
             pcm[i * 2 + 1] = (byte)(v >> 8);
         }
-        return pcm;
+        return (pcm, samples);
     }
 
     private static float[] PadTail(float[] samples, int silenceSamples)

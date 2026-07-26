@@ -144,6 +144,15 @@ if (args.Contains("--pick-clip"))
     return ClipAudition.Pick(args);
 }
 
+if (args.Contains("--clone-stability"))
+{
+    // Measures how consistently each candidate reference clones, by pitch, across a
+    // spread of sentences - finds the reference that stays in-character instead of
+    // drifting gender mid-conversation. --install locks in the most stable one.
+    //   --clone-stability --name=N [--install]
+    return await ClipAudition.StabilityAsync(args);
+}
+
 if (args.Contains("--pick"))
 {
     // Promotes one shortlisted candidate to that character's live voiceprint.
