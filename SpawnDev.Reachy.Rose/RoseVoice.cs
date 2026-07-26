@@ -274,10 +274,12 @@ public sealed class RoseVoice : IDisposable
     {
         if (_clone is not null && _voiceprints.TryGetValue(character.Name, out var vp))
         {
-            // Per-character pitch ceiling (N is a pre-teen boy near the female line).
-            // Renders are serialised through the conversation, so setting this per call
-            // is safe. 0 leaves the guard bounded by the reference pitch alone.
+            // Per-character pitch bounds (N is a pre-teen boy: near the female line at
+            // the top, and prone to rendering too deep at the bottom). Renders are
+            // serialised through the conversation, so setting these per call is safe.
+            // 0 leaves that side of the guard bounded by the reference pitch alone.
             _clone.PitchCeiling = character.PitchCeilingHz ?? 0;
+            _clone.PitchFloor = character.PitchFloorHz ?? 0;
             var pcm = await Task.Run(() => _clone.Clone(text, vp.Samples, vp.Rate, vp.Text), ct);
             return (pcm, _clone.SampleRate, true);
         }
@@ -286,11 +288,19 @@ public sealed class RoseVoice : IDisposable
     }
 
     /// <summary>A stable short name for this exact line in this exact voice.</summary>
+    /// <remarks>
+    /// The pitch-guard bounds are part of the key: a clip cached under an earlier,
+    /// looser guard would otherwise be served forever even after the voice was
+    /// retuned - which is exactly how a too-deep greeting got frozen and kept playing.
+    /// Folding the bounds in means a tuning change re-renders rather than replays.
+    /// </remarks>
     private string ContentKey(string text, Character character)
     {
-        var voice = _voiceprints.ContainsKey(character.Name) ? $"clone:{character.Name}" : $"kokoro:{character.Voice}";
+        var cloned = _voiceprints.ContainsKey(character.Name);
+        var voice = cloned ? $"clone:{character.Name}" : $"kokoro:{character.Voice}";
+        var tuning = cloned ? $"|c{character.PitchCeilingHz ?? 0}|f{character.PitchFloorHz ?? 0}" : "";
         var bytes = System.Security.Cryptography.SHA256.HashData(
-            System.Text.Encoding.UTF8.GetBytes($"{voice}|{NormalizeLoudness}|{text.Trim()}"));
+            System.Text.Encoding.UTF8.GetBytes($"{voice}|{NormalizeLoudness}{tuning}|{text.Trim()}"));
         return Convert.ToHexString(bytes)[..16].ToLowerInvariant();
     }
 

@@ -26,7 +26,8 @@ public record Character(
     (double Left, double Right) AntennaRest,
     double MotionScale,
     string[]? Mishearings = null,
-    double? PitchCeilingHz = null)
+    double? PitchCeilingHz = null,
+    double? PitchFloorHz = null)
 {
     public string[] Mishearings { get; init; } = Mishearings ?? [];
 
@@ -38,6 +39,15 @@ public record Character(
     /// characters whose reference pitch alone bounds them cleanly.
     /// </summary>
     public double? PitchCeilingHz { get; init; } = PitchCeilingHz;
+
+    /// <summary>
+    /// Lower pitch bound (Hz) for the voice-clone guard. The self-calibrated floor
+    /// (reference pitch minus a generous margin) allows a boyish voice to occasionally
+    /// render surprisingly deep - measured: N drops to ~133 Hz on some lines while his
+    /// normal is ~180 - which reads as the wrong, too-low voice. This holds the low end
+    /// up to keep a young voice consistently young. Null leaves the generous default.
+    /// </summary>
+    public double? PitchFloorHz { get; init; } = PitchFloorHz;
 }
 
 /// <summary>
@@ -94,7 +104,11 @@ public static class CharacterLibrary
         // A pre-teen boy: his voice is high and near the female range, so the cloner
         // occasionally renders a sentence as an adult woman. Measured: N's real renders
         // stay <= ~185 Hz and the drifts jump to 230+, so 210 sits cleanly in the gap.
-        PitchCeilingHz: 210);
+        PitchCeilingHz: 210,
+        // ...and the cloner also sometimes renders him too DEEP (~133 Hz vs his usual
+        // ~180), which sounds like a different, older character. 160 keeps the low end
+        // in a pre-teen-boy range; measured normal renders sit comfortably above it.
+        PitchFloorHz: 160);
 
     public static readonly Character Uzi = new(
         "Uzi", ["uzi doorman"],

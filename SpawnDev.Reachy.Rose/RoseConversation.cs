@@ -313,6 +313,31 @@ public sealed class RoseConversation : IAsyncDisposable
     }
 
     /// <summary>
+    /// Waits until the head stops moving (a queued goto/sleep move has finished) or the
+    /// timeout elapses, by polling its pose. Used before cutting motor power so the head
+    /// is resting on the shell rather than dropped mid-move.
+    /// </summary>
+    private async Task WaitForHeadStillAsync(TimeSpan timeout)
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        XyzRpyPose? last = null;
+        while (clock.Elapsed < timeout)
+        {
+            XyzRpyPose? now;
+            try { now = await _robot.GetHeadPoseAsync(); }
+            catch { return; }   // cannot read - do not stall the shutdown
+
+            if (now is not null && last is not null)
+            {
+                var delta = Math.Abs(now.Z - last.Z) + Math.Abs(now.Pitch - last.Pitch) + Math.Abs(now.Roll - last.Roll);
+                if (delta < 0.003) return;   // pose no longer changing = move complete
+            }
+            last = now;
+            await Task.Delay(150);
+        }
+    }
+
+    /// <summary>
     /// Phrases that mean Aubs is asking for a different character. Longest first, so
     /// "i want to talk to" wins over "i want" and the name slot lands correctly.
     /// </summary>
@@ -399,7 +424,20 @@ public sealed class RoseConversation : IAsyncDisposable
         try
         {
             await SetWatchingAsync(false, CancellationToken.None);
-            await _body.SettleAsync(_character);
+
+            // Lower the head into the shell to a mechanically-stable rest with the
+            // daemon's own sleep move, and WAIT for it to finish before cutting motor
+            // torque. SettleAsync only went to a neutral (head-up) pose, so disabling
+            // the motors from there let the head drop wherever gravity took it. The
+            // move POST returns as soon as the move is queued, so settle is detected by
+            // watching the head pose stop changing.
+            try
+            {
+                await _robot.GotoSleepAsync();
+                await WaitForHeadStillAsync(TimeSpan.FromSeconds(4));
+            }
+            catch { /* fall through to releasing the motors regardless */ }
+
             await _robot.SetMotorModeAsync(MotorMode.Disabled);
         }
         catch { /* shutting down anyway */ }

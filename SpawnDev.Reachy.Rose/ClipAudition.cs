@@ -209,6 +209,7 @@ public static class ClipAudition
         var guard = args.Contains("--guard");            // apply the pitch-stabilising re-roll
         var only = ShowAudio.ArgValue(args, "--only=");   // test just one reference by label
         var ceiling = Dbl(args, "--ceiling=", 0);         // absolute pitch cap for the guard
+        var floor = Dbl(args, "--floor=", 0);             // absolute pitch floor for the guard
         var provider = args.Contains("--gpu") || args.Contains("--cuda") ? "cuda" : "cpu";
 
         var solution = ShowAudio.SolutionDir();
@@ -220,17 +221,23 @@ public static class ClipAudition
 
         // Short lines stress the clone hardest - the less text there is, the less the
         // model has to pin the speaker down, so drift shows up here first.
-        string[] sentences =
-        [
-            "Yeah, okay!",
-            "Oh gosh, I don't know about that.",
-            "Do you want to hang out for a bit?",
-            "Hmm, let me think about it.",
-            "I'm not scary, I promise!",
-            "We could totally be friends, if you want.",
-            "Wait, what was that?",
-            "That sounds really nice, actually.",
-        ];
+        // --line="..." measures one specific line instead (e.g. the fixed greeting),
+        // rendered --repeat times so its pitch spread is visible.
+        var oneLine = ShowAudio.ArgValue(args, "--line=");
+        var repeat = Int(args, "--repeat=", 8);
+        string[] sentences = oneLine is not null
+            ? Enumerable.Repeat(oneLine, Math.Max(1, repeat)).ToArray()
+            :
+            [
+                "Yeah, okay!",
+                "Oh gosh, I don't know about that.",
+                "Do you want to hang out for a bit?",
+                "Hmm, let me think about it.",
+                "I'm not scary, I promise!",
+                "We could totally be friends, if you want.",
+                "Wait, what was that?",
+                "That sounds really nice, actually.",
+            ];
 
         // Build the candidate reference list: the live voiceprint, each reel clip, and
         // concatenations of the first few reel clips for stronger anchoring.
@@ -271,7 +278,7 @@ public static class ClipAudition
 
         Console.WriteLine($"Clone-stability for {name}: {sentences.Length} sentences x {refs.Count} reference(s) ({(fp32 ? "fp32" : "int8")}, {steps} steps{(guard ? ", pitch guard ON" : "")}).\n");
 
-        using var voice = new RoseVoiceClone(modelDir, fp32, steps, provider) { StabilizePitch = guard, PitchCeiling = ceiling };
+        using var voice = new RoseVoiceClone(modelDir, fp32, steps, provider) { StabilizePitch = guard, PitchCeiling = ceiling, PitchFloor = floor };
         var scored = new List<(string Label, double MeanF0, double StdF0, int OutOfRange, float[] Audio, string Text)>();
 
         foreach (var (label, audio, text) in refs)

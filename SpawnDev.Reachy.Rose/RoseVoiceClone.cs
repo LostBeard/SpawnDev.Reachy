@@ -153,6 +153,14 @@ public sealed class RoseVoiceClone : IDisposable
     /// </summary>
     public double PitchCeiling { get; set; }
 
+    /// <summary>
+    /// Absolute lower pitch bound (Hz), or 0 to bound only by the reference's own pitch.
+    /// The self-calibrated floor (refF0 - 70) is generous so normal male dips are not
+    /// rejected, but a young voice can render surprisingly deep and still land inside
+    /// it; this holds the low end up so a pre-teen boy stays a pre-teen boy.
+    /// </summary>
+    public double PitchFloor { get; set; }
+
     public byte[] Clone(string text, float[] reference, int referenceSampleRate, string referenceText, float speed = 1.0f)
     {
         // A quarter second of trailing silence so the model does not carry the last
@@ -173,7 +181,7 @@ public sealed class RoseVoiceClone : IDisposable
         // because the drift that matters is upward into the female range. Relative to
         // the reference's own pitch, so it self-calibrates and never rejects a female
         // character's legitimately high render.
-        var lo = refF0 - 70;
+        var lo = PitchFloor > 0 ? Math.Max(refF0 - 70, PitchFloor) : refF0 - 70;
         var hi = PitchCeiling > 0 ? Math.Min(refF0 + 35, PitchCeiling) : refF0 + 35;
 
         byte[] best = [];
