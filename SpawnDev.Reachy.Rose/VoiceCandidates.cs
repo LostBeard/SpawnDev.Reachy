@@ -640,7 +640,7 @@ internal static class VoiceCandidates
     /// hand-picked pitch or loudness threshold would need re-tuning per character and
     /// would silently rot. Z-scores need no thresholds and adapt on their own.
     /// </remarks>
-    private static List<Candidate> Rank(List<Candidate> all)
+    internal static List<Candidate> Rank(List<Candidate> all)
     {
         var f0 = Z(all.Select(c => c.F.MedianF0));
         var rms = Z(all.Select(c => c.F.RmsDb));

@@ -127,6 +127,23 @@ if (args.Contains("--sheet") && !args.Contains("--pick"))
     return await VoiceCandidates.SheetAsync(args);
 }
 
+if (args.Contains("--audition-clips"))
+{
+    // Turns a hand-collected clip compilation (a fan "N voice clips" video) into a
+    // ranked set of cloning references: VAD-split, denoised, Whisper-transcribed, and
+    // scored on the same calmness rule as the show pipeline. Cleaner source than the
+    // scored show audio, and every clip is already the right character.
+    //   --audition-clips --mp3=<path> --name=N [--top=8] [--min=2.5] [--max=10] [--say="..."] [--no-clone]
+    return await ClipAudition.RunAsync(args);
+}
+
+if (args.Contains("--pick-clip"))
+{
+    // Promotes one auditioned reel clip to the character's live voiceprint.
+    //   --pick-clip --name=N --index=3
+    return ClipAudition.Pick(args);
+}
+
 if (args.Contains("--pick"))
 {
     // Promotes one shortlisted candidate to that character's live voiceprint.
