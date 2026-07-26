@@ -52,9 +52,42 @@ public sealed class RoseTray : ApplicationContext
         _icon.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) _icon.ContextMenuStrip?.Show(Cursor.Position); };
         BuildMenu();
 
+        // Win11 dumps new tray icons in the hidden overflow. Promote ours to always
+        // visible so the status dot is actually glanceable. The registry entry is
+        // created by Explorer when the icon first registers, which can lag the ctor,
+        // so do it now and once more a moment later for the very first launch.
+        PromoteTrayIcon();
+        var promote = new System.Windows.Forms.Timer { Interval = 3000 };
+        promote.Tick += (_, _) => { promote.Stop(); promote.Dispose(); PromoteTrayIcon(); };
+        promote.Start();
+
         // Start Rose right away when asked (hands-free / autostart), once the message
         // loop is pumping so the UI marshaling is live.
         if (autoStart) Post(ToggleRose);
+    }
+
+    /// <summary>
+    /// Marks our tray icon "promoted" (always shown, not in the Win11 overflow) so
+    /// nobody has to hunt through Settings for the status dot. Matches the icon's
+    /// registry entry by our own executable path, so it self-heals on any PC or after
+    /// a rebuild to a new path.
+    /// </summary>
+    private void PromoteTrayIcon()
+    {
+        try
+        {
+            var exe = ExePath();
+            using var root = Registry.CurrentUser.OpenSubKey(@"Control Panel\NotifyIconSettings", writable: true);
+            if (root is null) return;
+            foreach (var name in root.GetSubKeyNames())
+            {
+                using var sub = root.OpenSubKey(name, writable: true);
+                if (sub?.GetValue("ExecutablePath") is string p &&
+                    string.Equals(p, exe, StringComparison.OrdinalIgnoreCase))
+                    sub.SetValue("IsPromoted", 1, RegistryValueKind.DWord);
+            }
+        }
+        catch { /* purely cosmetic - never fail startup over the tray-visibility flag */ }
     }
 
     // ---- menu ---------------------------------------------------------------
