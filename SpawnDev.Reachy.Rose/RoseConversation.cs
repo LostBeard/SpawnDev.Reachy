@@ -1,6 +1,12 @@
 namespace SpawnDev.Reachy.Rose;
 
 /// <summary>
+/// What Rose is doing right now, for a status light. Purely a display signal - the
+/// loop's behaviour does not depend on it.
+/// </summary>
+public enum RoseState { Off, Connecting, Listening, Thinking, Talking }
+
+/// <summary>
 /// The whole loop: Rose listens, thinks, and answers in character.
 /// </summary>
 /// <remarks>
@@ -29,6 +35,21 @@ public sealed class RoseConversation : IAsyncDisposable
 
     /// <summary>Diagnostic log.</summary>
     public event Action<string>? Log;
+
+    /// <summary>Raised when Rose changes state (connecting/listening/thinking/talking), for a status light.</summary>
+    public event Action<RoseState>? StateChanged;
+
+    private RoseState _state = RoseState.Off;
+
+    /// <summary>What Rose is doing right now.</summary>
+    public RoseState State => _state;
+
+    private void SetState(RoseState s)
+    {
+        if (_state == s) return;
+        _state = s;
+        StateChanged?.Invoke(s);
+    }
 
     /// <summary>The character Rose is currently playing.</summary>
     public Character Character => _character;
@@ -90,6 +111,7 @@ public sealed class RoseConversation : IAsyncDisposable
 
     public async Task StartAsync(CancellationToken ct = default)
     {
+        SetState(RoseState.Connecting);
         var problem = await _brain.CheckAsync(ct);
         if (problem is not null)
             throw new InvalidOperationException(
@@ -125,6 +147,7 @@ public sealed class RoseConversation : IAsyncDisposable
         // reads as alive between turns rather than sitting perfectly still.
         _body.StartIdle(_character);
         _body.Idle = true;
+        SetState(RoseState.Listening);
     }
 
     private async Task HandleUtteranceAsync(string text)
@@ -137,6 +160,7 @@ public sealed class RoseConversation : IAsyncDisposable
         try
         {
             OnLine?.Invoke("Aubs", text);
+            SetState(RoseState.Thinking);
 
             // Take the head back from the tracker for the whole reply, so gestures
             // and the tracker are never driving the same joints at once. Quiet idle
@@ -197,6 +221,7 @@ public sealed class RoseConversation : IAsyncDisposable
                     playback = Task.Run(async () =>
                     {
                         await previous;
+                        SetState(RoseState.Talking);
                         OnLine?.Invoke(_character.Name, say);
 
                         // Logged so overlap can be checked from the timeline rather
@@ -222,6 +247,46 @@ public sealed class RoseConversation : IAsyncDisposable
             // or a failure - otherwise she goes blind for the rest of the session.
             try { await SetWatchingAsync(true, CancellationToken.None); } catch { }
             _body.Idle = true;
+            SetState(RoseState.Listening);
+            _turn.Release();
+        }
+    }
+
+    /// <summary>
+    /// Switches character on command (the tray's character picker), the same way a
+    /// spoken "can you be Uzi" would, and greets as the new one.
+    /// </summary>
+    /// <remarks>
+    /// Takes the reply lock so it cannot collide with a turn in progress; if Rose is
+    /// mid-sentence it waits for her to finish, then switches. A no-op if she is
+    /// already that character.
+    /// </remarks>
+    public async Task SwitchToAsync(Character to, CancellationToken ct = default)
+    {
+        if (to.Name == _character.Name) return;
+        await _turn.WaitAsync(ct);
+        try
+        {
+            SetState(RoseState.Talking);
+            await SetWatchingAsync(false, ct);
+            await _body.QuietAsync(ct);
+
+            _character = to;
+            _brain.Forget();
+            _body.SetIdleCharacter(to);
+            _ = _body.SettleAsync(to, ct);
+
+            var line = SwitchGreeting(to);
+            OnLine?.Invoke(to.Name, line);
+            await SpeakGatedAsync(line, ct);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { Log?.Invoke($"switch failed: {ex.GetType().Name}: {ex.Message}"); }
+        finally
+        {
+            try { await SetWatchingAsync(true, CancellationToken.None); } catch { }
+            _body.Idle = true;
+            SetState(RoseState.Listening);
             _turn.Release();
         }
     }
@@ -320,6 +385,8 @@ public sealed class RoseConversation : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        SetState(RoseState.Off);
+
         // Hand the VRAM back before tearing down, while the token is still live.
         await _brain.ReleaseAsync();
 

@@ -27,7 +27,11 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net10.0</TargetFramework>
+    <!-- net10.0-windows + WinForms for the tray icon. Stays a console Exe so the talk
+         and test modes still print to the terminal. Windows-only anyway: sherpa
+         win-x64 + CUDA + the robot daemon. -->
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
