@@ -267,6 +267,10 @@ public sealed class RoseVoice : IDisposable
     {
         if (_clone is not null && _voiceprints.TryGetValue(character.Name, out var vp))
         {
+            // Per-character pitch ceiling (N is a pre-teen boy near the female line).
+            // Renders are serialised through the conversation, so setting this per call
+            // is safe. 0 leaves the guard bounded by the reference pitch alone.
+            _clone.PitchCeiling = character.PitchCeilingHz ?? 0;
             var pcm = await Task.Run(() => _clone.Clone(text, vp.Samples, vp.Rate, vp.Text), ct);
             return (pcm, _clone.SampleRate, true);
         }

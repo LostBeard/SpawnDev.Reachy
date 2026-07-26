@@ -96,6 +96,14 @@ public sealed class RoseVoiceClone : IDisposable
     /// <summary>How many times to re-roll a drifted render before keeping the closest.</summary>
     public int MaxRerolls { get; set; } = 4;
 
+    /// <summary>
+    /// Absolute upper pitch bound (Hz), or 0 to bound only by the reference's own pitch.
+    /// For a character whose real voice sits near the male/female line - a pre-teen boy -
+    /// the self-calibrated band runs too high, so this caps it into clearly-in-character
+    /// territory. Left 0 for characters the reference pitch bounds cleanly on its own.
+    /// </summary>
+    public double PitchCeiling { get; set; }
+
     public byte[] Clone(string text, float[] reference, int referenceSampleRate, string referenceText, float speed = 1.0f)
     {
         // A quarter second of trailing silence so the model does not carry the last
@@ -117,7 +125,7 @@ public sealed class RoseVoiceClone : IDisposable
         // the reference's own pitch, so it self-calibrates and never rejects a female
         // character's legitimately high render.
         var lo = refF0 - 70;
-        var hi = refF0 + 35;
+        var hi = PitchCeiling > 0 ? Math.Min(refF0 + 35, PitchCeiling) : refF0 + 35;
 
         byte[] best = [];
         var bestDist = double.MaxValue;

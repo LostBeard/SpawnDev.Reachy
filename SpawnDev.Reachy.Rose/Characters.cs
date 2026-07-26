@@ -25,9 +25,19 @@ public record Character(
     string Persona,
     (double Left, double Right) AntennaRest,
     double MotionScale,
-    string[]? Mishearings = null)
+    string[]? Mishearings = null,
+    double? PitchCeilingHz = null)
 {
     public string[] Mishearings { get; init; } = Mishearings ?? [];
+
+    /// <summary>
+    /// Upper pitch bound (Hz) for the voice-clone guard, when this character's real
+    /// voice sits near the male/female line and a self-calibrated band is not enough.
+    /// N is a pre-teen boy - a high voice that the cloner occasionally tips over into
+    /// an adult woman - so his renders are rejected and re-rolled above this. Null for
+    /// characters whose reference pitch alone bounds them cleanly.
+    /// </summary>
+    public double? PitchCeilingHz { get; init; } = PitchCeilingHz;
 }
 
 /// <summary>
@@ -80,7 +90,11 @@ public static class CharacterLibrary
         cool." You are not cool and not trying to be, and that is your charm.
         """ + SharedRules,
         AntennaRest: (0.25, 0.25), MotionScale: 1.2,
-        Mishearings: ["an", "en", "in", "and", "hen", "him"]);
+        Mishearings: ["an", "en", "in", "and", "hen", "him"],
+        // A pre-teen boy: his voice is high and near the female range, so the cloner
+        // occasionally renders a sentence as an adult woman. Measured: N's real renders
+        // stay <= ~185 Hz and the drifts jump to 230+, so 210 sits cleanly in the gap.
+        PitchCeilingHz: 210);
 
     public static readonly Character Uzi = new(
         "Uzi", ["uzi doorman"],

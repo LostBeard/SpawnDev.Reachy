@@ -208,6 +208,7 @@ public static class ClipAudition
         var install = args.Contains("--install");
         var guard = args.Contains("--guard");            // apply the pitch-stabilising re-roll
         var only = ShowAudio.ArgValue(args, "--only=");   // test just one reference by label
+        var ceiling = Dbl(args, "--ceiling=", 0);         // absolute pitch cap for the guard
 
         var solution = ShowAudio.SolutionDir();
         var modelDir = Path.Combine(solution, "models");
@@ -269,7 +270,7 @@ public static class ClipAudition
 
         Console.WriteLine($"Clone-stability for {name}: {sentences.Length} sentences x {refs.Count} reference(s) ({(fp32 ? "fp32" : "int8")}, {steps} steps{(guard ? ", pitch guard ON" : "")}).\n");
 
-        using var voice = new RoseVoiceClone(modelDir, fp32, steps) { StabilizePitch = guard };
+        using var voice = new RoseVoiceClone(modelDir, fp32, steps) { StabilizePitch = guard, PitchCeiling = ceiling };
         var scored = new List<(string Label, double MeanF0, double StdF0, int OutOfRange, float[] Audio, string Text)>();
 
         foreach (var (label, audio, text) in refs)
