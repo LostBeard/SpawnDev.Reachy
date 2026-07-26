@@ -61,15 +61,15 @@ public sealed class RoseVoice : IDisposable
     /// this degrades to the old behaviour rather than failing.
     /// </param>
     /// <param name="cloneSteps">
-    /// Flow-matching steps for the cloner. The default is 4 because that is what the
-    /// distill model is trained for and, measured on this machine, it renders FASTER
-    /// than real time (2.3s of compute for 3.4s of speech) - which is what makes a
-    /// cloned voice usable in a live conversation at all. 16 steps costs 9.9s for the
-    /// same line: fine for pre-generating fixed lines, far too slow to talk to.
+    /// Flow-matching steps for the cloner. 16, because that is the setting the clean
+    /// recipe was confirmed on. Fewer steps render faster - 4 is roughly real time -
+    /// but they leave the echoey, reverby quality this pipeline exists to avoid.
+    /// Speed is not worth reintroducing it; if a line needs to be instant, pre-generate
+    /// it and let the cache serve it.
     /// </param>
     /// <param name="fp32">Full-precision cloner. int8 is faster but leaves an echo tinge.</param>
     public RoseVoice(ReachyMiniClient rose, string? modelPath = null,
-                     bool cloneVoices = false, int cloneSteps = 4, bool fp32 = true)
+                     bool cloneVoices = false, int cloneSteps = 16, bool fp32 = true)
     {
         _rose = rose;
         _synth = new KokoroWavSynthesizer(modelPath ?? ResolveModelPath());
@@ -227,9 +227,14 @@ public sealed class RoseVoice : IDisposable
 
         var soundName = $"rose_{key}.wav";
 
-        var (pcm, rate) = await RenderAsync(text, character, ct);
+        var (pcm, rate, wasCloned) = await RenderAsync(text, character, ct);
         if (pcm.Length == 0) return default;
-        if (NormalizeLoudness) Loudify(pcm);
+
+        // Kokoro output is clean, so compressing it is free loudness. A cloned voice is
+        // NOT clean in the same way - it carries a little low-level tail, and pulling
+        // that up with makeup gain is what makes it sound reverby. The clean-clone
+        // recipe never had a compressor in it, so cloned audio does not get one.
+        if (NormalizeLoudness && !wasCloned) Loudify(pcm);
 
         var wav = BuildWav(pcm, rate);
         using var ms = new MemoryStream(wav);
@@ -252,15 +257,15 @@ public sealed class RoseVoice : IDisposable
     /// Falling back to Kokoro rather than throwing matters: a character whose
     /// reference has not been chosen yet should still talk to Aubs.
     /// </remarks>
-    private async Task<(byte[] Pcm, int Rate)> RenderAsync(string text, Character character, CancellationToken ct)
+    private async Task<(byte[] Pcm, int Rate, bool Cloned)> RenderAsync(string text, Character character, CancellationToken ct)
     {
         if (_clone is not null && _voiceprints.TryGetValue(character.Name, out var vp))
         {
             var pcm = await Task.Run(() => _clone.Clone(text, vp.Samples, vp.Rate, vp.Text), ct);
-            return (pcm, _clone.SampleRate);
+            return (pcm, _clone.SampleRate, true);
         }
 
-        return (await _synth.SynthesizeAsync(text, GetVoice(character.Voice)), KokoroRate);
+        return (await _synth.SynthesizeAsync(text, GetVoice(character.Voice)), KokoroRate, false);
     }
 
     /// <summary>A stable short name for this exact line in this exact voice.</summary>

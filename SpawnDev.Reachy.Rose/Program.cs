@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using SpawnDev.Reachy;
 using SpawnDev.Reachy.Rose;
 
@@ -26,7 +26,7 @@ if (args.Contains("--talk"))
     var model = args.FirstOrDefault(a => a.StartsWith("--model="))?["--model=".Length..]
                 ?? "llama3.1:8b";
 
-    var cloneSteps = int.TryParse(args.FirstOrDefault(a => a.StartsWith("--steps="))?["--steps=".Length..], out var cs) ? cs : 4;
+    var cloneSteps = int.TryParse(args.FirstOrDefault(a => a.StartsWith("--steps="))?["--steps=".Length..], out var cs) ? cs : 16;
     await using var convo = new RoseConversation(
         talkIp, ModelDir(), model, cloneVoices: args.Contains("--clone"), cloneSteps: cloneSteps);
 
@@ -483,7 +483,9 @@ if (args.Contains("--test-loop"))
         Path.Combine(Directory.GetCurrentDirectory(), "kokoro.onnx"));
     var askerVoice = KokoroSharp.KokoroVoiceManager.GetVoice("af_sarah");
 
-    await using var loop = new RoseConversation(loopIp, ModelDir(), useMicrophone: false);
+    await using var loop = new RoseConversation(
+        loopIp, ModelDir(), useMicrophone: false, cloneVoices: args.Contains("--clone"),
+        cloneSteps: int.TryParse(args.FirstOrDefault(a => a.StartsWith("--steps="))?["--steps=".Length..], out var ls) ? ls : 16);
     loop.OnLine += (who, what) =>
     {
         Console.ForegroundColor = who == "Aubs" ? ConsoleColor.Cyan : ConsoleColor.Yellow;
@@ -971,7 +973,7 @@ if (args.Contains("--test-voiceprints"))
     // upload, real playback out of Rose. Also proves the content-addressed cache
     // actually short-circuits, which is what keeps a repeated line free.
     var vpIp = args.FirstOrDefault(a => !a.StartsWith("--") && a.Contains('.')) ?? "192.168.1.170";
-    var vpSteps = int.TryParse(args.FirstOrDefault(a => a.StartsWith("--steps="))?["--steps=".Length..], out var vs) ? vs : 4;
+    var vpSteps = int.TryParse(args.FirstOrDefault(a => a.StartsWith("--steps="))?["--steps=".Length..], out var vs) ? vs : 16;
     var vpName = args.FirstOrDefault(a => a.StartsWith("--name="))?["--name=".Length..] ?? "N";
     var silent = args.Contains("--no-play");
 
@@ -1015,8 +1017,11 @@ if (args.Contains("--test-voiceprints"))
     var ratio = warm.Duration.TotalSeconds / Math.Max(swWarm.Elapsed.TotalSeconds, 0.001);
     Console.WriteLine($"  warm prepare:  {swWarm.Elapsed.TotalSeconds:F1}s for {warm.Duration.TotalSeconds:F1}s of audio  ({ratio:F2}x real time)");
     var warmOk = ratio >= 1.0;
-    Console.WriteLine($"  [{(warmOk ? "PASS" : "WARN")}] renders faster than real time"
-                    + (warmOk ? "" : "  -> lower --steps, or pre-generate her fixed lines"));
+    // Not a failure. 16 steps is the setting the clean recipe was confirmed on, and it
+    // is slower than real time by design - the fix for that is pre-generating lines,
+    // NEVER dropping steps, which brings the echo straight back.
+    Console.WriteLine($"  [{(warmOk ? "PASS" : "INFO")}] renders faster than real time"
+                    + (warmOk ? "" : "  -> expected at 16 steps; pre-generate fixed lines rather than lowering --steps"));
 
     if (!silent)
     {
