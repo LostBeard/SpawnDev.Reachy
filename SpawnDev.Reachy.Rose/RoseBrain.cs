@@ -27,6 +27,22 @@ public sealed class RoseBrain
     private const int MaxTurns = 12;
 
     /// <summary>
+    /// Context window, in tokens. Ollama defaults to a mere 2048 when the request does
+    /// not ask for more, and once the persona (a few hundred tokens of system prompt)
+    /// plus a growing history crosses that line Ollama SILENTLY drops the oldest
+    /// messages - which is Rose losing the thread of the conversation mid-chat. 8192
+    /// holds the whole <see cref="MaxTurns"/> window plus the persona with room to spare
+    /// and costs little KV-cache on an 8B model.
+    /// </summary>
+    /// <remarks>
+    /// This MUST match between <see cref="WarmAsync"/> and <see cref="StreamReplyAsync"/>:
+    /// Ollama reloads the model whenever num_ctx changes between calls, so warming at one
+    /// size and chatting at another would pay the full load on the first real question -
+    /// exactly the wait the warm-up exists to avoid.
+    /// </remarks>
+    private const int NumCtx = 8192;
+
+    /// <summary>
     /// How long Ollama keeps the model in VRAM after a request.
     /// </summary>
     /// <remarks>
@@ -72,7 +88,9 @@ public sealed class RoseBrain
             prompt = "hi",
             stream = false,
             keep_alive = KeepAlive,
-            options = new { num_predict = 1 },
+            // num_ctx must match the chat call's, or Ollama reloads the model on the
+            // first real question and the warm-up buys nothing.
+            options = new { num_predict = 1, num_ctx = NumCtx },
         });
 
         using var content = new StringContent(body, Encoding.UTF8, "application/json");
@@ -156,6 +174,9 @@ public sealed class RoseBrain
                 temperature = 0.8,
                 top_p = 0.9,
                 num_predict = 200,
+                // Hold the whole conversation window; the default 2048 truncates it
+                // and Rose forgets what she was just talking about.
+                num_ctx = NumCtx,
             },
         });
 
