@@ -95,7 +95,7 @@ public sealed class RoseVoiceClone : IDisposable
     /// without disturbing how anything else resolves. cuDNN 9 also delay-loads
     /// zlibwapi.dll, which lives in the same folder. See gpu-setup/GPU-SETUP.md.
     /// </remarks>
-    private static void EnsureCudaLibrariesFindable()
+    internal static void EnsureCudaLibrariesFindable()
     {
         if (_cudaPathReady) return;
         _cudaPathReady = true;

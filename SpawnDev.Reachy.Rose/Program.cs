@@ -626,7 +626,11 @@ if (args.Contains("--test-ears"))
         return 1;
     }
 
-    await using var ears = new RoseEars(ModelDir());
+    var earsModel = args.FirstOrDefault(a => a.StartsWith("--model="))?["--model=".Length..] ?? "small.en";
+    var earsProvider = args.Contains("--cpu") ? "cpu" : "cuda";
+    var earsQuant = args.Contains("--int8") ? "int8" : args.Contains("--fp32") ? "fp32" : null;
+    Console.WriteLine($"ASR: whisper {earsModel} on {earsProvider} ({earsQuant ?? "auto"})");
+    await using var ears = new RoseEars(ModelDir(), whisperModel: earsModel, provider: earsProvider, quantization: earsQuant);
     var heard = new List<string>();
     ears.OnUtterance += t => { heard.Add(t); Console.WriteLine($"  UTTERANCE: \"{t}\""); };
     ears.Log += m => Console.WriteLine($"  [log] {m}");

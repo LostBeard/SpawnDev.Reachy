@@ -52,10 +52,34 @@ public sealed class RoseEars : IAsyncDisposable
     /// </remarks>
     public bool Muted { get; set; }
 
-    public RoseEars(string modelDir, int threads = 4)
+    /// <param name="whisperModel">
+    /// Which Whisper model to transcribe with, e.g. "small.en" or "base.en". small.en
+    /// understands a child's voice noticeably better than base.en; base.en is the
+    /// fallback the fetch step always installs. The folder must be
+    /// <c>models/sherpa-onnx-whisper-&lt;model&gt;</c>.
+    /// </param>
+    /// <param name="provider">
+    /// onnxruntime execution provider, "cuda" (default) or "cpu". On CUDA the model runs
+    /// on the RTX card, ~1.7x faster than CPU. sherpa falls back to CPU on its own if the
+    /// CUDA provider is not available, so "cuda" is always safe.
+    /// </param>
+    /// <param name="quantization">
+    /// "int8" (default), "fp32", or null for the default. int8 is used because the fp32
+    /// Whisper decoder faults the current onnxruntime CUDA provider; see the note by the
+    /// quant selection below.
+    /// </param>
+    public RoseEars(string modelDir, int threads = 4, string whisperModel = "small.en", string provider = "cuda", string? quantization = null)
     {
         var vadModel = Path.Combine(modelDir, "silero_vad.onnx");
-        var whisperDir = Path.Combine(modelDir, "sherpa-onnx-whisper-base.en");
+
+        var whisperName = whisperModel;
+        var whisperDir = Path.Combine(modelDir, $"sherpa-onnx-whisper-{whisperName}");
+        if (!Directory.Exists(whisperDir))
+        {
+            // Not downloaded yet - fall back to base.en, which fetch_models always installs.
+            whisperName = "base.en";
+            whisperDir = Path.Combine(modelDir, "sherpa-onnx-whisper-base.en");
+        }
 
         if (!File.Exists(vadModel))
             throw new FileNotFoundException($"Silero VAD model not found: {vadModel}");
@@ -81,13 +105,37 @@ public sealed class RoseEars : IAsyncDisposable
 
         _vad = new VoiceActivityDetector(vadConfig, bufferSizeInSeconds: 30.0f);
 
+        // onnxruntime loads cuDNN by bare name from the exe dir + PATH, not the
+        // runtimes/native subfolder where the CUDA build lives, so make it findable
+        // before creating the recognizer (same as the voice cloner does).
+        if (provider == "cuda") RoseVoiceClone.EnsureCudaLibrariesFindable();
+
+        // Use the int8 weights on BOTH providers. The fp32 Whisper decoder crashes the
+        // onnxruntime 1.27 CUDA EP (native SEHException on load - fp32+CPU and int8+CUDA
+        // both work, only fp32+CUDA faults), so int8 is the working GPU path here, and it
+        // still runs on the card ~1.7x faster than on CPU (measured: 2.7s vs 4.7s on a
+        // 16s clip) at small.en accuracy. `quantization:"fp32"` forces the full-precision
+        // weights for when a future onnxruntime fixes the CUDA fault. Both ship in the package.
+        var useInt8 = quantization switch
+        {
+            "int8" => true,
+            "fp32" => false,
+            _ => true,
+        };
+        var quant = useInt8 ? ".int8" : "";
+
         var asrConfig = new OfflineRecognizerConfig();
-        asrConfig.ModelConfig.Whisper.Encoder = Path.Combine(whisperDir, "base.en-encoder.int8.onnx");
-        asrConfig.ModelConfig.Whisper.Decoder = Path.Combine(whisperDir, "base.en-decoder.int8.onnx");
-        asrConfig.ModelConfig.Tokens = Path.Combine(whisperDir, "base.en-tokens.txt");
+        asrConfig.ModelConfig.Whisper.Encoder = Path.Combine(whisperDir, $"{whisperName}-encoder{quant}.onnx");
+        asrConfig.ModelConfig.Whisper.Decoder = Path.Combine(whisperDir, $"{whisperName}-decoder{quant}.onnx");
+        asrConfig.ModelConfig.Tokens = Path.Combine(whisperDir, $"{whisperName}-tokens.txt");
         asrConfig.ModelConfig.ModelType = "whisper";
-        asrConfig.ModelConfig.NumThreads = threads;
-        asrConfig.ModelConfig.Provider = "cpu";
+        // On GPU the flow runs on the card, so a couple of threads is plenty; on CPU use
+        // the caller's thread budget.
+        asrConfig.ModelConfig.NumThreads = provider == "cuda" ? 2 : threads;
+        asrConfig.ModelConfig.Provider = provider;
+        // 1 = sherpa prints its "available providers" line so we can SEE whether CUDA
+        // actually engaged rather than assuming it did.
+        asrConfig.ModelConfig.Debug = provider == "cuda" ? 1 : 0;
         asrConfig.DecodingMethod = "greedy_search";
 
         _asr = new OfflineRecognizer(asrConfig);

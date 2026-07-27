@@ -34,40 +34,15 @@ else
     Console.WriteLine($"    done ({new FileInfo(vad).Length / 1024}KB)");
 }
 
-// Whisper base.en: accurate enough for a child's speech, small enough to stay
-// well under a second per utterance on CPU.
-var whisperDir = Path.Combine(models, "sherpa-onnx-whisper-base.en");
-if (Directory.Exists(whisperDir) && File.Exists(Path.Combine(whisperDir, "base.en-tokens.txt")))
-{
-    Console.WriteLine("  whisper base.en already present");
-}
-else
-{
-    var archive = Path.Combine(models, "whisper.tar.bz2");
-    Console.WriteLine("  downloading whisper base.en (~200MB, this takes a minute) ...");
+// Whisper small.en: the transcriber. small.en understands a child's voice noticeably
+// better than base.en, and on the GPU it stays well under a second per utterance.
+await Tar($"{Releases}/sherpa-onnx-whisper-small.en.tar.bz2",
+          "sherpa-onnx-whisper-small.en", "whisper small.en (~460MB, takes a minute)");
 
-    await using (var s = await http.GetStreamAsync($"{Releases}/sherpa-onnx-whisper-base.en.tar.bz2"))
-    await using (var f = File.Create(archive))
-        await s.CopyToAsync(f);
-
-    Console.WriteLine("    extracting ...");
-    var tar = Process.Start(new ProcessStartInfo("tar", $"xjf \"{archive}\"")
-    {
-        WorkingDirectory = models,
-        UseShellExecute = false,
-    });
-    if (tar is null) { Console.Error.WriteLine("could not start tar"); return 1; }
-    await tar.WaitForExitAsync();
-
-    if (tar.ExitCode != 0)
-    {
-        Console.Error.WriteLine($"tar failed with exit code {tar.ExitCode}");
-        return 1;
-    }
-
-    File.Delete(archive);
-    Console.WriteLine("    done");
-}
+// base.en is kept as the automatic fallback when small.en has not been fetched (and
+// for CPU-only machines that want the fastest model).
+await Tar($"{Releases}/sherpa-onnx-whisper-base.en.tar.bz2",
+          "sherpa-onnx-whisper-base.en", "whisper base.en (fallback)");
 
 // ---- voice cloning (ZipVoice) ----
 
