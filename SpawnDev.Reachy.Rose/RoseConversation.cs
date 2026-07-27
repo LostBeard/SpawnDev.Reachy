@@ -416,6 +416,7 @@ public sealed class RoseConversation : IAsyncDisposable
         "Doll" => "...hello.",
         "Khan" => "Oh! Hello there. Did you want to talk about doors?",
         "Thad" => "Heyyy! This is gonna be great!",
+        "Cyn" => "Hehe, hi! Ooh, this is gonna be fun.",
         _ => $"Hi! It's {c.Name}.",
     };
 

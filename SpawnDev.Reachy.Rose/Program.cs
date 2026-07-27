@@ -676,6 +676,11 @@ if (args.Contains("--test-brain"))
     var problem = await brain.CheckAsync();
     if (problem is not null) { Console.WriteLine($"  {problem}"); return 1; }
 
+    // --character=<name> exercises any character's persona (default N).
+    var brainChar = args.FirstOrDefault(a => a.StartsWith("--character="))?["--character=".Length..] is { } cn
+        && CharacterLibrary.Find(cn) is { } fc ? fc : CharacterLibrary.N;
+    Console.WriteLine($"  (character: {brainChar.Name})");
+
     string[] prompts =
     [
         "Hi! Do you like My Little Pony?",
@@ -688,10 +693,10 @@ if (args.Contains("--test-brain"))
         Console.WriteLine($"\n  Aubs: {p}");
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var first = TimeSpan.Zero;
-        await brain.StreamReplyAsync(p, CharacterLibrary.N, sentence =>
+        await brain.StreamReplyAsync(p, brainChar, sentence =>
         {
             if (first == TimeSpan.Zero) first = sw.Elapsed;
-            Console.WriteLine($"     N: {sentence}");
+            Console.WriteLine($"     {brainChar.Name}: {sentence}");
             return Task.CompletedTask;
         });
         Console.WriteLine($"        (first sentence {first.TotalSeconds:F2}s, total {sw.Elapsed.TotalSeconds:F2}s)");
@@ -1298,6 +1303,7 @@ if (args.Contains("--test-speech"))
         ("can you be using doorman", "Uzi"),       // same surname as Khan; first name says it's Uzi
         ("can you be dull", "Doll"),
         ("can you be sad", "Thad"),
+        ("can you be sin", "Cyn"),                 // "can you be Cyn" as heard
         ("switch to using", "Uzi"),
 
         // ...but the same words must NOT hijack ordinary sentences. Several of them
@@ -1335,7 +1341,7 @@ if (args.Contains("--test-characters"))
         ("N", "N"), ("uzi", "Uzi"), ("Uzi Doorman", "Uzi"),
         ("switch to V", "V"), ("can you be J", "J"), ("talk like Doll", "Doll"),
         ("serial designation n", "N"), ("khan", "Khan"), ("uzi's dad", "Khan"),
-        ("thad", "Thad"), ("VEE", "V"), ("jay", "J"),
+        ("thad", "Thad"), ("VEE", "V"), ("jay", "J"), ("cyn", "Cyn"),
         ("hello there", null), ("", null), ("   ", null),
     ];
 
