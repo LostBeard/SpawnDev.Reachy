@@ -118,12 +118,23 @@ public sealed class RoseTray : ApplicationContext
 
         menu.Items.Add(new ToolStripSeparator());
 
+        var (enabled, wakes) = ReadAutostart();
+
         var autostart = new ToolStripMenuItem("Start with Windows", null, (_, _) => ToggleAutostart())
         {
-            Checked = IsAutostartEnabled(),
+            Checked = enabled,
             Name = "autostart",
         };
         menu.Items.Add(autostart);
+
+        // Aubs's call: by default the icon just appears at login and waits (it will not
+        // wake a maybe-off robot at boot). Turn this on and startup also begins talking.
+        var wake = new ToolStripMenuItem("Wake Rose at startup", null, (_, _) => ToggleAutostartWake())
+        {
+            Checked = wakes,
+            Name = "autostartwake",
+        };
+        menu.Items.Add(wake);
 
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(new ToolStripMenuItem("Exit", null, (_, _) => ExitApp()));
@@ -139,7 +150,9 @@ public sealed class RoseTray : ApplicationContext
         ((ToolStripMenuItem)menu.Items["chars"]!).Enabled = running;
         foreach (ToolStripMenuItem item in ((ToolStripMenuItem)menu.Items["chars"]!).DropDownItems)
             item.Checked = item.Text == _character.Name;
-        ((ToolStripMenuItem)menu.Items["autostart"]!).Checked = IsAutostartEnabled();
+        var (enabled, wakes) = ReadAutostart();
+        ((ToolStripMenuItem)menu.Items["autostart"]!).Checked = enabled;
+        ((ToolStripMenuItem)menu.Items["autostartwake"]!).Checked = wakes;
     }
 
     // ---- start / stop -------------------------------------------------------
@@ -216,18 +229,45 @@ public sealed class RoseTray : ApplicationContext
 
     // ---- autostart (HKCU Run key) ------------------------------------------
 
-    private static bool IsAutostartEnabled()
+    /// <summary>
+    /// Reads the two autostart facts straight from the Run-key value, which is the only
+    /// source of truth: whether we launch at login at all, and whether that launch also
+    /// wakes Rose (the value carries <c>--start</c> when it does).
+    /// </summary>
+    private static (bool enabled, bool wakes) ReadAutostart()
     {
         using var key = Registry.CurrentUser.OpenSubKey(RunKey);
-        return key?.GetValue(RunValue) is not null;
+        if (key?.GetValue(RunValue) is not string v) return (false, false);
+        return (true, v.Contains("--start", StringComparison.OrdinalIgnoreCase));
     }
 
-    private void ToggleAutostart()
+    /// <summary>Writes (or clears) the Run-key value for the given autostart settings.</summary>
+    private void WriteAutostart(bool enabled, bool wakes)
     {
         using var key = Registry.CurrentUser.OpenSubKey(RunKey, writable: true)
                         ?? Registry.CurrentUser.CreateSubKey(RunKey);
-        if (key.GetValue(RunValue) is not null) key.DeleteValue(RunValue, throwOnMissingValue: false);
-        else key.SetValue(RunValue, $"\"{ExePath()}\" --tray {_robotHost}");
+        if (!enabled) { key.DeleteValue(RunValue, throwOnMissingValue: false); return; }
+        var start = wakes ? " --start" : "";
+        key.SetValue(RunValue, $"\"{ExePath()}\" --tray {_robotHost}{start}");
+    }
+
+    /// <summary>Toggles whether Rose's tray launches at login, keeping the wake preference.</summary>
+    private void ToggleAutostart()
+    {
+        var (enabled, wakes) = ReadAutostart();
+        WriteAutostart(!enabled, wakes);
+        RefreshMenu();
+    }
+
+    /// <summary>
+    /// Toggles whether the login launch also wakes Rose. Turning this on implies starting
+    /// with Windows (a wake preference does nothing if she never launches at login), so it
+    /// enables autostart too.
+    /// </summary>
+    private void ToggleAutostartWake()
+    {
+        var (_, wakes) = ReadAutostart();
+        WriteAutostart(enabled: true, wakes: !wakes);
         RefreshMenu();
     }
 

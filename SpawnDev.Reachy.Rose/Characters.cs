@@ -27,9 +27,20 @@ public record Character(
     double MotionScale,
     string[]? Mishearings = null,
     double? PitchCeilingHz = null,
-    double? PitchFloorHz = null)
+    double? PitchFloorHz = null,
+    double SpeakingRate = 1.0)
 {
     public string[] Mishearings { get; init; } = Mishearings ?? [];
+
+    /// <summary>
+    /// How fast this character talks, as a multiplier on the synthesiser's speed.
+    /// 1.0 is the model's natural pace; below 1.0 is slower and more relaxed, above
+    /// is quicker. A zero-shot clone inherits the tempo of its reference clip, so a
+    /// character whose reel line was delivered fast comes out sounding rushed - this
+    /// pulls the pace back without touching pitch or the reference choice. Applies to
+    /// both the show-voice clone and the Kokoro fallback.
+    /// </summary>
+    public double SpeakingRate { get; init; } = SpeakingRate;
 
     /// <summary>
     /// Upper pitch bound (Hz) for the voice-clone guard, when this character's real
@@ -116,7 +127,11 @@ public static class CharacterLibrary
         // ...and the cloner also sometimes renders him too DEEP (~133 Hz vs his usual
         // ~180), which sounds like a different, older character. 160 keeps the low end
         // in a pre-teen-boy range; measured normal renders sit comfortably above it.
-        PitchFloorHz: 160);
+        PitchFloorHz: 160,
+        // N's reference reel line is a quick, energetic delivery, so his clone came out
+        // sounding rushed. Pull the pace back a touch. Measured on his greeting: 1.0 ->
+        // 2.7s of audio, 0.9 slows it without dragging. Tune by ear.
+        SpeakingRate: 0.9);
 
     public static readonly Character Uzi = new(
         "Uzi", ["uzi doorman"],

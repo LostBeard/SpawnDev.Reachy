@@ -286,11 +286,13 @@ public sealed class RoseVoice : IDisposable
             // 0 leaves that side of the guard bounded by the reference pitch alone.
             _clone.PitchCeiling = character.PitchCeilingHz ?? 0;
             _clone.PitchFloor = character.PitchFloorHz ?? 0;
-            var pcm = await Task.Run(() => _clone.Clone(text, vp.Samples, vp.Rate, vp.Text), ct);
+            var pcm = await Task.Run(
+                () => _clone.Clone(text, vp.Samples, vp.Rate, vp.Text, (float)character.SpeakingRate), ct);
             return (pcm, _clone.SampleRate, true);
         }
 
-        return (await _synth.SynthesizeAsync(text, GetVoice(character.Voice)), KokoroRate, false);
+        var kokoroConfig = new KokoroSharp.Processing.KokoroTTSPipelineConfig { Speed = (float)character.SpeakingRate };
+        return (await _synth.SynthesizeAsync(text, GetVoice(character.Voice), kokoroConfig), KokoroRate, false);
     }
 
     /// <summary>A stable short name for this exact line in this exact voice.</summary>
@@ -304,7 +306,12 @@ public sealed class RoseVoice : IDisposable
     {
         var cloned = _voiceprints.ContainsKey(character.Name);
         var voice = cloned ? $"clone:{character.Name}" : $"kokoro:{character.Voice}";
-        var tuning = cloned ? $"|c{character.PitchCeilingHz ?? 0}|f{character.PitchFloorHz ?? 0}" : "";
+        // Speaking rate changes the audio, so it belongs in the key for BOTH paths -
+        // otherwise a retuned pace would replay the stale, differently-paced clip (the
+        // same trap the pitch bounds fixed). Pitch bounds only apply to the clone.
+        var tuning = cloned
+            ? $"|c{character.PitchCeilingHz ?? 0}|f{character.PitchFloorHz ?? 0}|r{character.SpeakingRate:0.###}"
+            : $"|r{character.SpeakingRate:0.###}";
         var bytes = System.Security.Cryptography.SHA256.HashData(
             System.Text.Encoding.UTF8.GetBytes($"{voice}|{NormalizeLoudness}{tuning}|{text.Trim()}"));
         return Convert.ToHexString(bytes)[..16].ToLowerInvariant();

@@ -269,10 +269,11 @@ if (args.Contains("--test-clone"))
     var fp32 = args.Contains("--fp32");
     var steps = int.TryParse(args.FirstOrDefault(a => a.StartsWith("--steps="))?["--steps=".Length..], out var st) ? st : 4;
     var provider = args.Contains("--gpu") || args.Contains("--cuda") ? "cuda" : "cpu";
-    Console.WriteLine($"model: {(fp32 ? "fp32" : "int8")}, steps: {steps}, provider: {provider}");
+    var rate = float.TryParse(args.FirstOrDefault(a => a.StartsWith("--rate="))?["--rate=".Length..], out var rt) ? rt : 1.0f;
+    Console.WriteLine($"model: {(fp32 ? "fp32" : "int8")}, steps: {steps}, provider: {provider}, rate: {rate:F2}");
     using var clone = new RoseVoiceClone(md, fp32, steps, provider);
     var sw = System.Diagnostics.Stopwatch.StartNew();
-    var pcm = clone.Clone(say, refSamples, refRate, refText);
+    var pcm = clone.Clone(say, refSamples, refRate, refText, rate);
     Console.WriteLine($"said:  \"{say}\"\ngenerated {pcm.Length / 2 / (double)clone.SampleRate:F1}s in {sw.Elapsed.TotalSeconds:F1}s");
 
     Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outPath))!);
