@@ -157,6 +157,14 @@ public sealed class RoseConversation : IAsyncDisposable
         // which reads as her being confused rather than busy.
         if (!await _turn.WaitAsync(0)) { Log?.Invoke($"busy, dropped: \"{text}\""); return; }
 
+        // A turn is seconds of work. Bound it hard so a stalled model call or a wedged
+        // GPU render (e.g. the card is starved) can never leave Rose frozen on "thinking"
+        // with the robot motionless - on timeout the turn aborts and she returns to
+        // listening. This is a safety net; the real cure for a wedge is not starving the GPU.
+        using var turnCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+        turnCts.CancelAfter(TimeSpan.FromSeconds(90));
+        var ct = turnCts.Token;
+
         try
         {
             OnLine?.Invoke("Aubs", text);
@@ -166,8 +174,8 @@ public sealed class RoseConversation : IAsyncDisposable
             // and the tracker are never driving the same joints at once. Quiet idle
             // motion first and wait for any twitch in flight, so the reply's first
             // gesture is never skipped by an idle move still holding the mover.
-            await SetWatchingAsync(false, _cts.Token);
-            await _body.QuietAsync(_cts.Token);
+            await SetWatchingAsync(false, ct);
+            await _body.QuietAsync(ct);
 
             if (TrySwitchCharacter(text, out var switched))
             {
@@ -177,11 +185,11 @@ public sealed class RoseConversation : IAsyncDisposable
 
                 // Settle into the new character's resting antenna posture, which is
                 // a large part of reading who she is at a glance.
-                _ = _body.SettleAsync(switched, _cts.Token);
+                _ = _body.SettleAsync(switched, ct);
 
                 var line = SwitchGreeting(switched);
                 OnLine?.Invoke(switched.Name, line);
-                await SpeakGatedAsync(line, _cts.Token);
+                await SpeakGatedAsync(line, ct);
                 return;
             }
 
@@ -208,14 +216,17 @@ public sealed class RoseConversation : IAsyncDisposable
                     // character who finishes moving before starting to talk reads as
                     // a machine running a script.
                     foreach (var a in actions)
-                        _ = _body.PerformAsync(a, _character, _cts.Token);
+                        _ = _body.PerformAsync(a, _character, ct);
 
                     // A sentence that was nothing but a stage direction has no
                     // speech left in it - skip the audio, but the gesture above
                     // still plays.
                     if (!SpokenText.IsSayable(say)) return;
 
-                    var prepared = await _voice.PrepareAsync(say, _character, _cts.Token);
+                    // WaitAsync so the turn timeout is observed even if the render's
+                    // native GPU call itself stalls - the await returns and Rose recovers,
+                    // rather than blocking forever on a call that cannot be cancelled.
+                    var prepared = await _voice.PrepareAsync(say, _character, ct).WaitAsync(ct);
 
                     var previous = playback;
                     playback = Task.Run(async () =>
@@ -228,14 +239,14 @@ public sealed class RoseConversation : IAsyncDisposable
                         // than only by ear: each start must be at or after the
                         // previous end.
                         var start = turnClock.Elapsed;
-                        await _voice.PlayAsync(prepared, _cts.Token);
+                        await _voice.PlayAsync(prepared, ct);
                         Log?.Invoke(
                             $"play [{start.TotalSeconds,5:F2}s -> {turnClock.Elapsed.TotalSeconds,5:F2}s] " +
                             $"{prepared.Duration.TotalSeconds:F2}s audio");
-                    }, _cts.Token);
-                }, _cts.Token);
+                    }, ct);
+                }, ct);
 
-                await playback;
+                await playback.WaitAsync(ct);
             }
             finally { _ears.Muted = false; }
         }

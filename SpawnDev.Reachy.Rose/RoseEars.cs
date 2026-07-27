@@ -59,16 +59,19 @@ public sealed class RoseEars : IAsyncDisposable
     /// <c>models/sherpa-onnx-whisper-&lt;model&gt;</c>.
     /// </param>
     /// <param name="provider">
-    /// onnxruntime execution provider, "cuda" (default) or "cpu". On CUDA the model runs
-    /// on the RTX card, ~1.7x faster than CPU. sherpa falls back to CPU on its own if the
-    /// CUDA provider is not available, so "cuda" is always safe.
+    /// onnxruntime execution provider, "cpu" (default) or "cuda". CPU is the default on
+    /// purpose: the GPU on this box already holds the language model (~6GB) and the voice
+    /// cloner, and on a 12GB card that leaves no room for Whisper too - adding it pushed
+    /// VRAM to ~96% and a starved CUDA op wedged the whole conversation ("stuck thinking,
+    /// no motion"). small.en on CPU is only ~1s per short utterance and keeps the whole
+    /// GPU for the model and the clone. Pass "cuda" only on a machine with VRAM to spare.
     /// </param>
     /// <param name="quantization">
     /// "int8" (default), "fp32", or null for the default. int8 is used because the fp32
     /// Whisper decoder faults the current onnxruntime CUDA provider; see the note by the
     /// quant selection below.
     /// </param>
-    public RoseEars(string modelDir, int threads = 4, string whisperModel = "small.en", string provider = "cuda", string? quantization = null)
+    public RoseEars(string modelDir, int threads = 4, string whisperModel = "small.en", string provider = "cpu", string? quantization = null)
     {
         var vadModel = Path.Combine(modelDir, "silero_vad.onnx");
 
