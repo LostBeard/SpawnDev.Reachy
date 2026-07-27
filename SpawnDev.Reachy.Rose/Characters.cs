@@ -196,10 +196,11 @@ public static class CharacterLibrary
         make dad jokes. You are trying your best and it shows.
         """ + SharedRules,
         AntennaRest: (0.1, 0.1), MotionScale: 0.9,
-        // "can" is what recognition returns most often for "Khan" (measured: Aubs's
-        // "can you be Khan Doorman" comes through as "can you be can doordoormen"). Like
-        // the other common-word mishearings it only matches as the first word after a
-        // switch cue, so it cannot hijack ordinary sentences.
+        // Recognition hears "Khan" as "can" (also con/kahn/gone). The FIRST name is what
+        // matters here: Khan and his daughter Uzi are both "Doorman", so the surname does
+        // not tell them apart - the misheard first name does. Like the other common-word
+        // mishearings, "can" only matches as the first word after a switch cue, so it
+        // cannot hijack an ordinary sentence.
         Mishearings: ["gone", "con", "kahn", "conn", "khan", "can", "kan"]);
 
     public static readonly Character Thad = new(
