@@ -1288,6 +1288,9 @@ if (args.Contains("--test-speech"))
         // Recognition mishearings, measured from --test-names. These must resolve.
         ("can you be using", "Uzi"),
         ("can you be gone", "Khan"),
+        ("can you be can doordoormen", "Khan"),   // "can you be Khan Doorman" as Aubs's mic hears it
+        ("can you be can", "Khan"),
+        ("switch to can", "Khan"),
         ("can you be dull", "Doll"),
         ("can you be sad", "Thad"),
         ("switch to using", "Uzi"),

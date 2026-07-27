@@ -196,7 +196,11 @@ public static class CharacterLibrary
         make dad jokes. You are trying your best and it shows.
         """ + SharedRules,
         AntennaRest: (0.1, 0.1), MotionScale: 0.9,
-        Mishearings: ["gone", "con", "kahn", "conn", "khan"]);
+        // "can" is what recognition returns most often for "Khan" (measured: Aubs's
+        // "can you be Khan Doorman" comes through as "can you be can doordoormen"). Like
+        // the other common-word mishearings it only matches as the first word after a
+        // switch cue, so it cannot hijack ordinary sentences.
+        Mishearings: ["gone", "con", "kahn", "conn", "khan", "can", "kan"]);
 
     public static readonly Character Thad = new(
         "Thad", ["thaddeus"],
