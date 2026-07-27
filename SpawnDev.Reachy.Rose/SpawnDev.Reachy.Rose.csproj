@@ -26,10 +26,13 @@
   </ItemGroup>
 
   <PropertyGroup>
-    <OutputType>Exe</OutputType>
-    <!-- net10.0-windows + WinForms for the tray icon. Stays a console Exe so the talk
-         and test modes still print to the terminal. Windows-only anyway: sherpa
-         win-x64 + CUDA + the robot daemon. -->
+    <OutputType>WinExe</OutputType>
+    <!-- net10.0-windows + WinForms for the tray icon. WinExe (Windows subsystem, not
+         console) so autostart / a double-click NEVER pops a console window - the tray
+         icon is the whole UI. The talk and test modes still print: when launched from a
+         terminal (dotnet run, the .bat launchers) a WinExe inherits the parent console's
+         stdout, so Console.WriteLine appears there; with no parent console it silently
+         no-ops. Windows-only anyway: sherpa win-x64 + CUDA + the robot daemon. -->
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>

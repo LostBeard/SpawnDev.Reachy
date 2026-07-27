@@ -140,11 +140,17 @@ public sealed class RoseVoice : IDisposable
     /// </summary>
     private static string ResolveModelPath()
     {
-        foreach (var dir in new[] { Directory.GetCurrentDirectory(), AppContext.BaseDirectory })
+        // Walk up from the binary so the file is found regardless of the working
+        // directory - autostart runs us from C:\Windows\System32, where neither the
+        // file nor a fresh download of it belongs. The cwd is also checked (it is
+        // pinned to the app root at startup) before falling back to downloading.
+        for (var d = new DirectoryInfo(AppContext.BaseDirectory); d is not null; d = d.Parent)
         {
-            var candidate = Path.Combine(dir, "kokoro.onnx");
+            var candidate = Path.Combine(d.FullName, "kokoro.onnx");
             if (File.Exists(candidate)) return candidate;
         }
+        var cwd = Path.Combine(Directory.GetCurrentDirectory(), "kokoro.onnx");
+        if (File.Exists(cwd)) return cwd;
 
         // Not present - this call downloads it (~310MB) and writes it to cwd.
         KokoroTTS.LoadModel();

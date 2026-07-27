@@ -17,6 +17,26 @@ static string ModelDir()
     return Path.Combine(Directory.GetCurrentDirectory(), "models");
 }
 
+// The app's root folder - the one holding kokoro.onnx and the models directory.
+// Found by walking up from the binary, so it is correct no matter what the working
+// directory is when we launch.
+static string AppRoot()
+{
+    for (var d = new DirectoryInfo(AppContext.BaseDirectory); d is not null; d = d.Parent)
+    {
+        if (File.Exists(Path.Combine(d.FullName, "kokoro.onnx")) ||
+            Directory.Exists(Path.Combine(d.FullName, "models")))
+            return d.FullName;
+    }
+    return AppContext.BaseDirectory;
+}
+
+// Pin the working directory to the app root before anything runs. Windows autostart
+// launches us from C:\Windows\System32, so every cwd-relative path - kokoro.onnx, the
+// models dir, and KokoroTTS's download-to-cwd - would otherwise resolve in System32 and
+// fail (or try to write 310MB there). Doing it once here fixes all of them.
+Directory.SetCurrentDirectory(AppRoot());
+
 if (args.Contains("--tray"))
 {
     // Tray-icon front end so Aubs uses Rose without a terminal (autostart target).
@@ -25,13 +45,11 @@ if (args.Contains("--tray"))
     var trayIp = args.FirstOrDefault(a => !a.StartsWith("--") && a.Contains('.')) ?? "192.168.1.170";
     var trayAutoStart = args.Contains("--start");
 
-    // Hide our own console window - the tray icon is the whole UI.
-    const int SW_HIDE = 0;
-    var console = GetConsoleWindow();
-    if (console != IntPtr.Zero) ShowWindow(console, SW_HIDE);
+    // No console to hide: the project is a WinExe (Windows subsystem), so Windows never
+    // allocates a console window for us. The tray icon is the whole UI.
 
-    // WinForms needs an STA message-pump thread; a console app's entry point is not
-    // STA, so run the loop on a dedicated one.
+    // WinForms needs an STA message-pump thread; the process entry point is not STA, so
+    // run the loop on a dedicated one.
     var trayThread = new Thread(() =>
     {
         System.Windows.Forms.Application.EnableVisualStyles();
@@ -43,11 +61,6 @@ if (args.Contains("--tray"))
     trayThread.Start();
     trayThread.Join();
     return 0;
-
-    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
-    static extern IntPtr GetConsoleWindow();
-    [System.Runtime.InteropServices.DllImport("user32.dll")]
-    static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 }
 
 if (args.Contains("--talk"))
