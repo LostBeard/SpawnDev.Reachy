@@ -64,7 +64,70 @@ public static class SpokenText
         }
         else spoken.Append(current);
 
-        return (Tidy(spoken.ToString()), [.. actions]);
+        // Safety net: the model sometimes writes a stage direction as plain prose with
+        // NO asterisks, in the third person - "His head bobs up and down like a
+        // bobblehead doll." Left alone that gets spoken out loud. Pull those sentences
+        // out into actions too.
+        var speech = ExtractProseStageDirections(Tidy(spoken.ToString()), actions);
+
+        return (speech, [.. actions]);
+    }
+
+    private static readonly string[] BodyParts =
+        ["head", "antenna", "antennas", "antennae", "torso", "body", "eye", "eyes",
+         "optic", "optics", "visor", "frame", "chassis", "display", "screen", "face",
+         "chest", "shoulder", "shoulders"];
+
+    // Stems, matched as the start of a word, so "bob" catches bobs/bobbed/bobbing.
+    private static readonly string[] MotionVerbs =
+        ["bob", "nod", "tilt", "rotat", "twitch", "sway", "perk", "droop", "spin",
+         "wiggl", "swivel", "bounc", "wobbl", "trembl", "quiver", "whir", "blink",
+         "flash", "shak", "slump", "jerk"];
+
+    /// <summary>
+    /// Moves any sentence that is really an un-asterisked stage direction from the spoken
+    /// text into <paramref name="actions"/>.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately conservative. A sentence is only treated as a stage direction when it
+    /// describes a body part MOVING and contains no first- or second-person words - because
+    /// an actual line to Aubs almost always says "I", "my", or "you". So "His head bobs up
+    /// and down" is pulled out, while "I nod", "your antennas are cool", and "Uzi built a
+    /// railgun" are all left as speech.
+    /// </remarks>
+    private static string ExtractProseStageDirections(string spoken, List<string> actions)
+    {
+        if (string.IsNullOrWhiteSpace(spoken)) return spoken;
+
+        var sentences = System.Text.RegularExpressions.Regex.Split(spoken, @"(?<=[.!?])\s+");
+        var kept = new List<string>();
+
+        foreach (var sentence in sentences)
+        {
+            var s = sentence.Trim();
+            if (s.Length == 0) continue;
+            if (IsProseStageDirection(s)) actions.Add(s);
+            else kept.Add(s);
+        }
+
+        return string.Join(" ", kept).Trim();
+    }
+
+    private static bool IsProseStageDirection(string sentence)
+    {
+        var l = sentence.ToLowerInvariant();
+
+        // A real line to Aubs almost always uses first or second person; never strip those.
+        if (System.Text.RegularExpressions.Regex.IsMatch(
+                l, @"\b(i|i'm|i've|i'll|i'd|my|me|mine|myself|we|us|our|let's|you|your|yours|you're|we're)\b"))
+            return false;
+
+        var hasBody = BodyParts.Any(b =>
+            System.Text.RegularExpressions.Regex.IsMatch(l, $@"\b{b}\b"));
+        var hasMotion = MotionVerbs.Any(v =>
+            System.Text.RegularExpressions.Regex.IsMatch(l, $@"\b{v}\w*"));
+
+        return hasBody && hasMotion;
     }
 
     /// <summary>

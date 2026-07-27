@@ -686,6 +686,11 @@ if (args.Contains("--test-brain"))
         "Hi! Do you like My Little Pony?",
         "What's your favourite thing about being a robot?",
         "I had a bad day at school.",
+        // Show-knowledge probes: the base model knows almost nothing about Murder Drones,
+        // so these check that the injected world lore is actually working.
+        "Do you know what Murder Drones is?",
+        "Where do we live?",
+        "What is the Absolute Solver, and who is it inside of?",
     ];
 
     foreach (var p in prompts)
@@ -1200,6 +1205,15 @@ if (args.Contains("--test-speech"))
         ("*unclosed action that runs on", "", 1),
         ("", "", 0),
         ("Wait, really?! *gasps*", "Wait, really?!", 1),
+        // Un-asterisked third-person stage directions must NOT be spoken (the bobblehead bug).
+        ("His head bobs up and down like a bobblehead doll.", "", 1),
+        ("His head bobs up and down like a bobblehead doll. Doors keep the cold out.",
+         "Doors keep the cold out.", 1),
+        ("Her torso rotates slowly.", "", 1),
+        // ...but a real line that mentions a body part while talking to Aubs stays speech.
+        ("You should see how my antennas wiggle when I am happy!",
+         "You should see how my antennas wiggle when I am happy!", 0),
+        ("Uzi built a railgun in her room.", "Uzi built a railgun in her room.", 0),
     ];
 
     var speechPass = 0;
