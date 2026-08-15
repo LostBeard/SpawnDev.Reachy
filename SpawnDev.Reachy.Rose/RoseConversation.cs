@@ -20,6 +20,7 @@ public sealed class RoseConversation : IAsyncDisposable
     private readonly RoseAudioLink _link;
     private readonly RoseEars _ears;
     private readonly RoseBrain _brain;
+    private readonly WebResearch _research;
     private readonly RoseVoice _voice;
     private readonly RoseBody _body;
 
@@ -90,7 +91,10 @@ public sealed class RoseConversation : IAsyncDisposable
         _robot = new ReachyMiniClient(robotHost);
         _link = new RoseAudioLink(robotHost);
         _ears = new RoseEars(modelDir);
-        _brain = new RoseBrain(ollamaModel);
+        // The one part that reaches off the box: lets characters look things up and
+        // explain them. Only used when the model itself decides to search.
+        _research = new WebResearch();
+        _brain = new RoseBrain(ollamaModel, research: _research);
         _voice = new RoseVoice(_robot, cloneVoices: cloneVoices, cloneSteps: cloneSteps);
         _body = new RoseBody(_robot);
         _useMicrophone = useMicrophone;
@@ -120,6 +124,7 @@ public sealed class RoseConversation : IAsyncDisposable
         _ears.Log += m => Log?.Invoke(m);
         _link.Log += m => Log?.Invoke(m);
         _body.Log += m => Log?.Invoke(m);
+        _research.Log += m => Log?.Invoke(m);
         _ears.OnUtterance += text => _ = HandleUtteranceAsync(text);
 
         // Motors must be live before she can lift her head to speak.

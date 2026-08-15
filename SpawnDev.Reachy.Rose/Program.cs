@@ -665,13 +665,28 @@ if (args.Contains("--test-ears"))
     return heard.Count > 0 ? 0 : 1;
 }
 
+if (args.Contains("--test-research"))
+{
+    // Exercises the web-research backend directly - no model, no robot.
+    //   --test-research "how do volcanoes erupt"
+    var q = args.FirstOrDefault(a => !a.StartsWith("--")) ?? "Murder Drones show";
+    var research = new WebResearch();
+    research.Log += m => Console.WriteLine($"  [log] {m}");
+    Console.WriteLine($"query: \"{q}\"\n");
+    var result = await research.SearchAsync(q);
+    Console.WriteLine(result);
+    return result.StartsWith("No results") || result.StartsWith("No search") ? 1 : 0;
+}
+
 if (args.Contains("--test-brain"))
 {
     // Exercises the LLM path alone - no robot, no audio - so persona quality and
     // latency can be judged without hardware in the way.
     var brainModel = args.FirstOrDefault(a => a.StartsWith("--model="))?["--model=".Length..]
                      ?? "llama3.1:8b";
-    var brain = new RoseBrain(brainModel);
+    var brainResearch = new WebResearch();
+    brainResearch.Log += m => Console.WriteLine($"  [research] {m}");
+    var brain = new RoseBrain(brainModel, research: brainResearch);
 
     var problem = await brain.CheckAsync();
     if (problem is not null) { Console.WriteLine($"  {problem}"); return 1; }
@@ -691,6 +706,8 @@ if (args.Contains("--test-brain"))
         "Do you know what Murder Drones is?",
         "Where do we live?",
         "What is the Absolute Solver, and who is it inside of?",
+        // Research probe: not in the persona lore, so a good answer needs a web_search.
+        "Can you look up who created Murder Drones and what studio makes it?",
     ];
 
     foreach (var p in prompts)
@@ -1339,10 +1356,39 @@ if (args.Contains("--test-speech"))
     }
     Console.WriteLine($"\n{switchPass}/{switchCases.Length} switch cases passed");
 
+    // Web-research gate: only real look-ups should offer the tool, never chit-chat.
+    Console.WriteLine("\n  web-research gate:");
+    (string Said, bool Expect)[] researchCases =
+    [
+        ("Can you look up the tallest dog in the world?", true),
+        ("Look it up for me", true),
+        ("Search the web for how volcanoes erupt", true),
+        ("How do volcanoes erupt?", true),
+        ("What is an axolotl?", true),
+        ("Who invented the light bulb?", true),
+        // ...but personal, roleplay, and in-world talk must NOT reach for the web.
+        ("What's your favorite color?", false),
+        ("Do you like My Little Pony?", false),
+        ("Where do we live?", false),
+        ("I built a castle in Minecraft.", false),
+        ("ketchup", false),
+        ("Can you be Uzi?", false),
+    ];
+    var researchPass = 0;
+    foreach (var (said, expect) in researchCases)
+    {
+        var got = RoseBrain.ResearchWorthy(said);
+        var ok = got == expect;
+        if (ok) researchPass++;
+        Console.WriteLine($"    [{(ok ? "PASS" : "FAIL")}] \"{said}\" -> {got}  expected {expect}");
+    }
+    Console.WriteLine($"\n{researchPass}/{researchCases.Length} research-gate cases passed");
+
     var allOk = speechPass == cases.Length && sayableOk
                 && switchPass == switchCases.Length
                 && boundaryPass == boundaryCases.Length
-                && gesturePass == gestureCases.Length;
+                && gesturePass == gestureCases.Length
+                && researchPass == researchCases.Length;
     return allOk ? 0 : 1;
 }
 

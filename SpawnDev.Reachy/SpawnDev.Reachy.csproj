@@ -1,14 +1,40 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
-  <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-  </PropertyGroup>
+	<PropertyGroup>
+		<TargetFrameworks>net10.0</TargetFrameworks>
+		<Nullable>enable</Nullable>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Version>0.1.0-local.1</Version>
+		<PackageReleaseNotes>0.1.0 - New</PackageReleaseNotes>
+		<GeneratePackageOnBuild>True</GeneratePackageOnBuild>
+		<GenerateDocumentationFile>true</GenerateDocumentationFile>
+		<EmbedAllSources>true</EmbedAllSources>
+		<DebugType>Embedded</DebugType>
+		<Title>SpawnDev.Reachy</Title>
+		<Authors>LostBeard</Authors>
+		<Description>A C# SDK for the Reachy Mini robot.</Description>
+		<PackageProjectUrl>https://github.com/LostBeard/SpawnDev.Reachy</PackageProjectUrl>
+		<PackageReadmeFile>README.md</PackageReadmeFile>
+		<PackageLicenseFile>LICENSE.txt</PackageLicenseFile>
+		<PackageIcon>icon-128.png</PackageIcon>
+		<RepositoryUrl>https://github.com/LostBeard/SpawnDev.Reachy.git</RepositoryUrl>
+		<RepositoryType>git</RepositoryType>
+		<PackageTags>DotNetWebAssembly;Browser;ReachyMini</PackageTags>
+		<NoPackageAnalysis>true</NoPackageAnalysis>
+		<EnableDefaultCompileItems>true</EnableDefaultCompileItems>
+		<IsPackable>true</IsPackable>
+		<LangVersion>latest</LangVersion>
+	</PropertyGroup>
 
-  <ItemGroup>
-    <PackageReference Include="Concentus" Version="2.2.2" />
-    <PackageReference Include="SpawnDev.SIPSorcery" Version="10.0.7" />
-  </ItemGroup>
+	<ItemGroup>
+		<None Include="..\icon-128.png" Pack="true" PackagePath="\" />
+		<None Include="..\LICENSE.txt" Pack="true" PackagePath="\" />
+		<None Include="..\README.md" Pack="true" PackagePath="\" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<PackageReference Include="Concentus" Version="2.2.2" />
+		<PackageReference Include="SpawnDev.SIPSorcery" Version="10.0.7" />
+	</ItemGroup>
 
 </Project>
