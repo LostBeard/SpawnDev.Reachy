@@ -1422,6 +1422,34 @@ if (args.Contains("--test-speech"))
         ("can you be quiet", null),
         ("I want a dull knife for the craft", null),
         ("be careful", null),
+
+        // ---- transcripts Aubs actually produced, 2026-08-29 ----------------------------
+        // These are not invented. Every line below came off the robot's own microphone
+        // during --names-live, which is why they belong here permanently: the synthesised
+        // suite scores 24/24 and could not see any of them.
+        // She dropped "can you" entirely and the bare "be " cue has to carry it. Asserted
+        // as Uzi because this gate runs with N already current, where resolving to N is
+        // correctly a no-op - the real utterance below would otherwise pass for the wrong
+        // reason. The "be " cue ends on a space, so it must NOT demand a non-letter after
+        // it, or the name itself is rejected.
+        ("and you'll be uzi", "Uzi"),
+        ("and you'll be n", null),                 // resolves to N, and N is already current
+        ("can you be sinned", "Cyn"),              // "Cyn" heard as a past-tense verb
+        ("can you be fad", "Thad"),
+        ("can you be, sen", "Cyn"),
+
+        // A pause before the name splits the utterance, and the halves arrive joined.
+        // "Khan" came back as "on" for BOTH speakers - and "on" is deliberately NOT an
+        // alias, because "can you be on my team?" is a sentence a child really says.
+        // Khan simply has to be asked again; a false switch mid-play is the worse failure.
+        ("can you be? on", null),
+
+        // Recognition returns "can you beat that" for "can you be Thad". A plain substring
+        // cue matches "can you be" inside "can you BEAT that" and leaves "at" in the name
+        // slot, so the cue has to end on a word boundary - otherwise this resolves, and so
+        // does "can you be at the store".
+        ("can you beat that", null),
+        ("can you be at the store", null),
     ];
 
     var switchPass = 0;

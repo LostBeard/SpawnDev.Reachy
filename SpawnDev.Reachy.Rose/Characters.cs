@@ -257,7 +257,7 @@ public static class CharacterLibrary
         AntennaRest: (0.6, -0.2), MotionScale: 1.3,
         // Recognition hears "Cyn" (said "sin") as sin/syn/seen. Matches only as the
         // first word after a switch cue, so the common words cannot hijack a sentence.
-        Mishearings: ["sin", "syn", "sinn", "seen", "cin"]);
+        Mishearings: ["sin", "syn", "sinn", "seen", "cin", "sen", "sinned"]);
 
     public static readonly Character Khan = new(
         "Khan", ["khan doorman", "uzi's dad"],
@@ -289,7 +289,7 @@ public static class CharacterLibrary
         // "sad" is a deliberate trade-off: it collides with asking a character to
         // ACT sad. In a Murder Drones roleplay "can you be Thad" is by far the more
         // likely sentence, and without it Thad is unreachable by voice entirely.
-        Mishearings: ["sad", "chad", "thad", "tad"]);
+        Mishearings: ["sad", "chad", "thad", "tad", "fad"]);
 
     public static readonly IReadOnlyList<Character> All = [N, Uzi, V, J, Doll, Khan, Thad, Cyn];
 
