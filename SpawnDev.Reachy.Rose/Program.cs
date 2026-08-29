@@ -1427,11 +1427,14 @@ if (args.Contains("--test-speech"))
         // These are not invented. Every line below came off the robot's own microphone
         // during --names-live, which is why they belong here permanently: the synthesised
         // suite scores 24/24 and could not see any of them.
-        // She dropped "can you" entirely and the bare "be " cue has to carry it. Asserted
-        // as Uzi because this gate runs with N already current, where resolving to N is
-        // correctly a no-op - the real utterance below would otherwise pass for the wrong
-        // reason. The "be " cue ends on a space, so it must NOT demand a non-letter after
-        // it, or the name itself is rejected.
+        // ⚠️ She said "can you be N" CORRECTLY - her father heard her say it. Recognition
+        // returned "and you'll be n", so the CUE PHRASE itself was misheard, not the name.
+        // Every longer cue was destroyed and only the bare "be " survived to carry it,
+        // which is the whole reason that fallback exists.
+        //
+        // Asserted as Uzi because this gate runs with N already current, where resolving
+        // to N is correctly a no-op - an N expectation would pass for the wrong reason.
+        // The "be " cue ends on a space, so it must NOT demand a non-letter after it.
         ("and you'll be uzi", "Uzi"),
         ("and you'll be n", null),                 // resolves to N, and N is already current
         ("can you be sinned", "Cyn"),              // "Cyn" heard as a past-tense verb
@@ -1442,7 +1445,14 @@ if (args.Contains("--test-speech"))
         // "Khan" came back as "on" for BOTH speakers - and "on" is deliberately NOT an
         // alias, because "can you be on my team?" is a sentence a child really says.
         // Khan simply has to be asked again; a false switch mid-play is the worse failure.
+        //
+        // Aubs's pause was not carelessness: she had just been told Khan is "kon" when she
+        // had been saying "can", and she stopped to choose. Worth knowing that BOTH of her
+        // pronunciations are already covered - "can" and "con" are both in his list - so
+        // the deliberation was the only thing that cost her the turn.
         ("can you be? on", null),
+        ("can you be can", "Khan"),                // her natural pronunciation
+        ("can you be kon", "Khan"),                // the one she was taught mid-session
 
         // Recognition returns "can you beat that" for "can you be Thad". A plain substring
         // cue matches "can you be" inside "can you BEAT that" and leaves "at" in the name

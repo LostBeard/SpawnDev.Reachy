@@ -459,8 +459,12 @@ public sealed class RoseConversation : IAsyncDisposable
                 var startOk = at == 0 || !char.IsLetter(lower[at - 1]);
                 // Only cues ENDING IN A LETTER need a boundary after them. "be " already
                 // ends on a space, and demanding a non-letter after that rejects the name
-                // itself - "and you'll be n" stopped resolving, which is exactly the shape
-                // a child produces. Measured on Aubs, not imagined.
+                // itself, which broke "and you'll be n".
+                //
+                // That transcript is why the bare "be " cue has to work: Aubs said "can you
+                // be N" perfectly clearly - her father heard her - and recognition returned
+                // "and you'll be n". THE CUE ITSELF GETS MISHEARD, not just the name. Every
+                // longer cue was gone from that sentence; only "be " survived to carry it.
                 var endOk = !char.IsLetter(cue[^1]) || end >= lower.Length || !char.IsLetter(lower[end]);
                 if (startOk && endOk)
                     return lower[end..].Split(

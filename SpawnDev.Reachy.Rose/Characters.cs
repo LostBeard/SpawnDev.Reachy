@@ -274,7 +274,7 @@ public static class CharacterLibrary
         // not tell them apart - the misheard first name does. Like the other common-word
         // mishearings, "can" only matches as the first word after a switch cue, so it
         // cannot hijack an ordinary sentence.
-        Mishearings: ["gone", "con", "kahn", "conn", "khan", "can", "kan"]);
+        Mishearings: ["gone", "con", "kahn", "conn", "khan", "can", "kan", "kon"]);
 
     public static readonly Character Thad = new(
         "Thad", ["thaddeus"],
