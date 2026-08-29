@@ -140,11 +140,29 @@ old behaviour. Home does not REPLACE goto_sleep - motor power can only be cut cl
 So speaking verification costs one transcription per line (~390ms) and essentially never forces a second
 render. **The pitch guard is the entire re-draw cost**, at roughly 2 draws per line.
 
-⚠️ **Open, and TJ's call:** one live line ("I'll try to blend in!") failed the pitch band on ALL FIVE
-draws - it was spoken as best-of-five but marked UNVERIFIED, so it never reached the durable cache. Short
-excited lines look like the case that runs past N's ceiling of 210Hz. That ceiling was tuned BY EAR and is
-what stopped N drifting into an adult woman mid-conversation, so it must not be loosened on a hunch - the
-next step is to measure the f0 distribution of N's renders against the band and decide from data.
+**Why the pitch guard rejects so much - measured, and NOT what I first assumed.** I wrote here that short
+excited lines were probably running past N's 210Hz ceiling. That was a guess and the data refutes it.
+
+`--test-verify` now prints the real band, and `--clone-stability --only=installed` the raw renders:
+
+| | |
+|---|---|
+| N's reference clip | **198Hz** |
+| accept band | **160-210Hz** (both the floor and the ceiling clamp) |
+| raw renders, guard off | `122 105 171 159 195 122 300 166` - mean **167Hz** |
+
+**The clone renders about 31Hz BELOW its own reference**, so 4 of the 5 rejections are for being too LOW
+and only one for being too high. That is the guard doing exactly the job it was added for: the
+per-character floor of 160 exists because N was rendering at 130-155Hz and greeting Aubs in too deep a
+voice. Tightening from the natural band (128-233) to 160-210 costs only one extra rejection in eight - the
+bulk are renders landing at 105-122Hz, far below even the natural floor.
+
+So the ~2 draws per line are the PRICE of N not sounding too deep, TJ-confirmed by ear, and not a defect
+to optimise away. ⚠️ **If we ever want fewer draws, the lever is a reference that drifts less, not a looser
+band** - `--clone-stability` ranks candidate references by exactly that. Do not loosen the band on a hunch.
+
+One live line ("I'll try to blend in!") failed all five draws and was spoken as best-of-five but marked
+UNVERIFIED, so it never reached the durable cache - the designed behaviour when nothing passes.
 
 ## Projects
 

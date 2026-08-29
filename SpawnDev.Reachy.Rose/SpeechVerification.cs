@@ -93,6 +93,16 @@ internal static class SpeechVerification
         Console.WriteLine($"reference : {reference.Length / (double)refRate:F1}s @ {refRate}Hz  \"{referenceText}\"");
         Console.WriteLine($"cloner    : {(fp32 ? "fp32" : "int8")}, {steps} steps, {provider}");
         Console.WriteLine($"recogniser: whisper {earsModel} on cpu (the SELF-CHECK model, not the microphone's)");
+
+        // The pitch guard's actual accept band, printed because it turns out to be where
+        // nearly all the re-draws come from - and because the band is derived from the
+        // reference clip's own f0, so it cannot be read off the character definition alone.
+        var refF0 = AudioAnalysis.Measure(reference, refRate).MedianF0;
+        var bandLo = character.PitchFloorHz is > 0 ? Math.Max(refF0 - 70, character.PitchFloorHz.Value) : refF0 - 70;
+        var bandHi = character.PitchCeilingHz is > 0 ? Math.Min(refF0 + 35, character.PitchCeilingHz.Value) : refF0 + 35;
+        Console.WriteLine($"pitch band: reference f0 {refF0:F0}Hz -> accepts {bandLo:F0}-{bandHi:F0}Hz "
+                        + $"(floor {(character.PitchFloorHz is > 0 ? "clamps" : "free")}, "
+                        + $"ceiling {(character.PitchCeilingHz is > 0 ? "clamps" : "free")})");
         Console.WriteLine();
 
         // The same class the live path checks renders with, so this harness measures the
