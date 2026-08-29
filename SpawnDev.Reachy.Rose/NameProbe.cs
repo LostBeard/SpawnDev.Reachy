@@ -28,6 +28,7 @@ internal static class NameProbe
         var rounds = int.TryParse(ShowAudio.ArgValue(args, "--rounds="), out var r) ? r : 2;
         var seconds = int.TryParse(ShowAudio.ArgValue(args, "--seconds="), out var sec) ? sec : 12;
         var simulate = args.Contains("--simulate");
+        var speak = !args.Contains("--silent") && !simulate;
         var modelDir = ModelDir();
 
         // The probe must ask AS a different character than the one being requested, or a
@@ -45,6 +46,29 @@ internal static class NameProbe
 
         RoseAudioLink? link = null;
         KokoroSharp.Utilities.KokoroWavSynthesizer? synth = null;
+        ReachyMiniClient? robot = null;
+        RoseVoice? voice = null;
+        SpeechRecognizer? verifier = null;
+
+        // Rose asks the questions OUT LOUD, so nobody has to watch a terminal to take part.
+        // That is not a nicety. The prompts are the whole interaction, and a child is not
+        // going to read a console - this makes it a game with the robot instead of a
+        // reading exercise, which is the difference between cooperation and a fight.
+        async Task SayAsync(string line)
+        {
+            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.WriteLine($"  (Rose says) {line}");
+            Console.ResetColor();
+            if (voice is null) return;
+
+            // Muted for the whole line: the array cancels her own voice in hardware, but a
+            // pause in HER sentence would otherwise read as the start of an answer.
+            ears.Muted = true;
+            try { await voice.SpeakAsync(line, CharacterLibrary.Default); }
+            catch (Exception ex) { Console.WriteLine($"        (could not speak: {ex.Message})"); }
+            finally { ears.Muted = false; }
+        }
+
         try
         {
             if (simulate)
@@ -62,7 +86,27 @@ internal static class NameProbe
                 link.OnMicAudio += ears.Feed;
                 Console.WriteLine($"connecting to {ip} ...");
                 await link.ConnectAsync();
-                Console.WriteLine("mode      : LIVE microphone\n");
+                Console.WriteLine("mode      : LIVE microphone");
+
+                if (speak)
+                {
+                    Console.WriteLine("warming up her voice (the first run renders each line, later runs replay them) ...");
+                    robot = new ReachyMiniClient(ip);
+                    // Motors on so she can lift her head clear of her own chest speaker.
+                    await robot.SetMotorModeAsync(MotorMode.Enabled);
+                    voice = new RoseVoice(robot, cloneVoices: true, cloneSteps: 16);
+                    voice.Log += m => Console.WriteLine($"  [voice] {m}");
+                    // The same self-check the conversation uses, so a garbled prompt is
+                    // caught and redrawn rather than spoken at a child trying to answer it.
+                    verifier = new SpeechRecognizer(modelDir, whisperModel: "base.en", threads: 2);
+                    voice.SpeechVerifier = verifier.Transcribe;
+                }
+                Console.WriteLine();
+
+                // The instruction lives in the intro, ONCE. The per-name prompt then asks
+                // for a transformation rather than a repeat - see the note on PromptFor.
+                await SayAsync("Hi! Let's play a game. I'm going to ask you to be different characters. "
+                             + "Every time, say... can you be... and then the name. Ready?");
             }
 
             var results = new List<(string Name, int Round, string Heard, string? Resolved, string? Slot)>();
@@ -78,13 +122,33 @@ internal static class NameProbe
                     Console.WriteLine($"  SAY:  \"{phrase}\"");
                     Console.ResetColor();
 
+                    await SayAsync(PromptFor(c.Name));
+
                     heard = null;
                     while (got.CurrentCount > 0) await got.WaitAsync(0);   // drop anything stale
 
                     if (simulate) await InjectAsync(synth!, ears, phrase);
 
                     var arrived = await got.WaitAsync(TimeSpan.FromSeconds(seconds));
-                    var text = heard ?? "";
+                    var collected = new List<string>();
+                    if (arrived && heard is { Length: > 0 }) collected.Add(heard);
+
+                    // Half a second of silence ends a turn, and a person pausing before the
+                    // name - "can you be... Khan" - drops it into a SECOND utterance. Read
+                    // only the first and the name is simply gone: that is exactly how Khan
+                    // came back as "Can you be" with nothing after it.
+                    //
+                    // The grace window is FIXED and the score is taken once at the end. It
+                    // deliberately does NOT stop early on a correct answer - listening until
+                    // the result is right would guarantee success and measure nothing.
+                    while (arrived)
+                    {
+                        heard = null;
+                        if (!await got.WaitAsync(TimeSpan.FromMilliseconds(1500))) break;
+                        if (heard is { Length: > 0 }) collected.Add(heard);
+                    }
+
+                    var text = string.Join(" ", collected);
 
                     if (!arrived || text.Length == 0)
                     {
@@ -110,6 +174,26 @@ internal static class NameProbe
         }
         finally
         {
+            // Park her the way the conversation does - HOME first, then sleep. goto_sleep
+            // from a head lifted for speaking throws the head back on the way down; from
+            // home it lowers into the chest. Only then cut motor power.
+            if (robot is not null)
+            {
+                try
+                {
+                    await SayAsync("All done. Thank you!");
+                    await robot.GoHomeAsync(duration: 1.0);
+                    await Task.Delay(1500);
+                    await robot.GotoSleepAsync();
+                    await Task.Delay(3000);
+                    await robot.SetMotorModeAsync(MotorMode.Disabled);
+                }
+                catch { /* shutting down anyway */ }
+            }
+
+            voice?.Dispose();
+            verifier?.Dispose();
+            robot?.Dispose();
             if (link is not null) await link.DisposeAsync();
             synth?.Dispose();
         }
@@ -167,6 +251,32 @@ internal static class NameProbe
             return;
         }
 
+        // A token offered to more than one character is not a mishearing of either - it is
+        // debris from the sentence around the name, and adding it would let one character
+        // steal the other's slot. ("at" was offered for BOTH Thad and Uzi, out of "can you
+        // beat that" and "can you beat U".)
+        var contested = suggestions
+            .SelectMany(kv => kv.Value.Select(w => (Word: w, Name: kv.Key)))
+            .GroupBy(x => x.Word, StringComparer.OrdinalIgnoreCase)
+            .Where(g => g.Count() > 1)
+            .Select(g => g.Key)
+            .ToList();
+
+        foreach (var word in contested)
+        {
+            foreach (var set in suggestions.Values) set.Remove(word);
+            Console.WriteLine($"\n  dropped \"{word}\" - offered for more than one character, so it is sentence");
+            Console.WriteLine("  debris rather than a name. Those turns are worth re-running instead.");
+        }
+        foreach (var dead in suggestions.Where(kv => kv.Value.Count == 0).Select(kv => kv.Key).ToList())
+            suggestions.Remove(dead);
+
+        if (suggestions.Count == 0)
+        {
+            Console.WriteLine("\nNothing safe to add from this run.");
+            return;
+        }
+
         Console.WriteLine("\n===== add these to Characters.cs =====");
         Console.WriteLine("(each goes in that character's Mishearings list; they only match in the");
         Console.WriteLine(" slot right after a switch cue, which is what makes ordinary words safe)\n");
@@ -174,6 +284,23 @@ internal static class NameProbe
             Console.WriteLine($"  {name,-5}  {string.Join(", ", set.Select(w => $"\"{w}\""))}");
         Console.WriteLine("\nRe-run afterwards to confirm they take.");
     }
+
+    /// <summary>
+    /// What Rose says to draw out "can you be NAME".
+    /// </summary>
+    /// <remarks>
+    /// It asks for a TRANSFORMATION, never a repeat. The first version said
+    /// "Say... can you be N?" and the very first tester read the whole line back, so the
+    /// recogniser was handed "Say, can you be in?" - which resolved, but is not the
+    /// sentence anyone says in a real conversation. A probe that changes the utterance it
+    /// is measuring is measuring the wrong thing, and a child will parrot harder than an
+    /// adult, not less.
+    ///
+    /// "Ask me to be N" cannot be answered by echoing it: the speaker has to produce the
+    /// phrase themselves. And if someone does parrot it anyway, the words still carry a
+    /// "be " cue with the name behind it, so the turn is not wasted.
+    /// </remarks>
+    private static string PromptFor(string name) => $"Ask me to be {name}.";
 
     /// <summary>Feeds synthesised speech in at the microphone's rate, paced like real audio.</summary>
     private static async Task InjectAsync(KokoroSharp.Utilities.KokoroWavSynthesizer synth, RoseEars ears, string phrase)

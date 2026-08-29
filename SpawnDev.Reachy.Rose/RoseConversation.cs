@@ -444,14 +444,29 @@ public sealed class RoseConversation : IAsyncDisposable
         if (string.IsNullOrWhiteSpace(text)) return null;
 
         var lower = text.ToLowerInvariant();
-        var cue = SwitchCues.FirstOrDefault(c => lower.Contains(c, StringComparison.Ordinal));
-        if (cue is null) return null;
 
-        var after = lower[(lower.IndexOf(cue, StringComparison.Ordinal) + cue.Length)..];
-        return after.Split(
-            [' ', '\t', ',', '.', '!', '?', ';', ':', '"', '\''],
-            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .FirstOrDefault() ?? "";
+        // The cue has to end on a WORD BOUNDARY. Plain Contains matches "can you be" inside
+        // "can you BEAT that", which leaves "at" sitting in the name slot - and recognition
+        // really does return "can you beat that" for "can you be Thad", so this is not
+        // hypothetical. Treating that "at" as a name would make "can you be at the store"
+        // switch character, and a probe reading the same slot would recommend exactly that.
+        foreach (var cue in SwitchCues)
+        {
+            var at = lower.IndexOf(cue, StringComparison.Ordinal);
+            while (at >= 0)
+            {
+                var end = at + cue.Length;
+                var startOk = at == 0 || !char.IsLetter(lower[at - 1]);
+                var endOk = end >= lower.Length || !char.IsLetter(lower[end]);
+                if (startOk && endOk)
+                    return lower[end..].Split(
+                        [' ', '\t', ',', '.', '!', '?', ';', ':', '"', '\''],
+                        StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                        .FirstOrDefault() ?? "";
+                at = lower.IndexOf(cue, at + 1, StringComparison.Ordinal);
+            }
+        }
+        return null;
     }
 
     private bool TrySwitchCharacter(string text, out Character character)
