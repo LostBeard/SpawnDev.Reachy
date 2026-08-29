@@ -533,6 +533,17 @@ if (args.Contains("--probe-limits"))
     return 0;
 }
 
+if (args.Contains("--names-live"))
+{
+    // What recognition returns for each character name when a REAL PERSON says it, through
+    // the robot's own microphone. --test-names below answers the same question with a
+    // synthesised adult voice and says so; a ten year old is misheard differently, and that
+    // is the case that actually matters. Prints the alias lines to paste into Characters.cs.
+    //   --names-live [ip] [--rounds=2] [--seconds=12] [--simulate]
+    // --simulate runs the identical flow on synthesised speech, no robot needed.
+    return await NameProbe.RunAsync(args);
+}
+
 if (args.Contains("--test-names"))
 {
     // Character switching is the feature Aubs will use most, and every character

@@ -57,7 +57,8 @@ Run these instead of asking a child to find your bugs for you.
 | `--test-loop` | the whole chain end to end with a synthesised question standing in for a person |
 | `--test-ears <file.wav>` | VAD + transcription on a file, no robot needed |
 | `--test-brain` | the language model alone, with latency per reply |
-| `--test-names` | what recognition ACTUALLY returns for each character name |
+| `--test-names` | what recognition ACTUALLY returns for each character name (synthesised adult voices) |
+| `--names-live` | the same, with a REAL person through the robot's mic; prints the aliases to add (`--simulate` for no robot) |
 | `--test-verify` | whether Rose listening to her own render catches a garbled one, and what the check costs |
 | `--test-speech` | sentence splitting, action stripping, switch-intent gating |
 | `--test-body` | every gesture, driven by real stage directions the model produced |

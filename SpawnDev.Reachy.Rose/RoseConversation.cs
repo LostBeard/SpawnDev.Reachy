@@ -410,10 +410,9 @@ public sealed class RoseConversation : IAsyncDisposable
     {
         if (string.IsNullOrWhiteSpace(text)) return null;
 
-        var lower = text.ToLowerInvariant();
-
-        var cue = SwitchCues.FirstOrDefault(c => lower.Contains(c, StringComparison.Ordinal));
-        if (cue is null) return null;
+        // No cue means this is talk ABOUT a character, not a request to BE one.
+        var slot = SwitchSlotWord(text);
+        if (slot is null) return null;
 
         var found = CharacterLibrary.Find(text);
 
@@ -421,20 +420,38 @@ public sealed class RoseConversation : IAsyncDisposable
         // for these names. Restricted to the word right after the cue, because
         // several mishearings are ordinary words and matching them anywhere would
         // fire on sentences that are not requests at all.
-        if (found is null)
-        {
-            var after = lower[(lower.IndexOf(cue, StringComparison.Ordinal) + cue.Length)..];
-            var slot = after.Split(
-                [' ', '\t', ',', '.', '!', '?', ';', ':', '"', '\''],
-                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .FirstOrDefault();
-
-            if (!string.IsNullOrEmpty(slot))
-                found = CharacterLibrary.All.FirstOrDefault(
-                    c => c.Mishearings.Contains(slot, StringComparer.OrdinalIgnoreCase));
-        }
+        if (found is null && slot.Length > 0)
+            found = CharacterLibrary.All.FirstOrDefault(
+                c => c.Mishearings.Contains(slot, StringComparer.OrdinalIgnoreCase));
 
         return found is null || found.Name == current.Name ? null : found;
+    }
+
+    /// <summary>
+    /// The word sitting in the name slot immediately after a switch cue, or null when the
+    /// utterance carries no cue at all.
+    /// </summary>
+    /// <remarks>
+    /// Exposed so a probe measuring what recognition returns for a name reads the SAME slot
+    /// the matcher does. Duplicating the cue list inside a diagnostic would let the two
+    /// drift, and the diagnostic exists precisely to be trusted about the matcher.
+    ///
+    /// Returns an empty string when there IS a cue but nothing after it ("can you be" then
+    /// silence) - a different thing from no cue at all, which is null.
+    /// </remarks>
+    public static string? SwitchSlotWord(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return null;
+
+        var lower = text.ToLowerInvariant();
+        var cue = SwitchCues.FirstOrDefault(c => lower.Contains(c, StringComparison.Ordinal));
+        if (cue is null) return null;
+
+        var after = lower[(lower.IndexOf(cue, StringComparison.Ordinal) + cue.Length)..];
+        return after.Split(
+            [' ', '\t', ',', '.', '!', '?', ';', ':', '"', '\''],
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .FirstOrDefault() ?? "";
     }
 
     private bool TrySwitchCharacter(string text, out Character character)
