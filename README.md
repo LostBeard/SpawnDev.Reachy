@@ -94,10 +94,10 @@ defaults to ECDSA - so it offers only `TLS_ECDHE_ECDSA_*` suites, which an RSA s
 select, and the handshake correctly fails with `handshake_failure(40)`. Set
 `RTCConfiguration.X_UseRsaForDtlsCertificate = true`.
 
-**Quiet audio is a loudness problem, not a hardware limit.** Every electrical control is
-already maxed with zero headroom - daemon volume 100, both ALSA PCM controls at 0.00 dB, and
-the XVF3800 has no speaker output gain at all. There is no ceiling left to raise, so raise
-the floor instead: Kokoro's output peaks at 0 dBFS but averages -18.4 dBFS, and
+**Quiet audio is a loudness problem, not a hardware limit** - *on daemon 1.9.0*. Every
+electrical control is already maxed with zero headroom - daemon volume 100, microphone gain
+also 100 (measured, not assumed), both ALSA PCM controls at 0.00 dB, and the XVF3800 exposes
+no speaker output gain. There was no ceiling left to raise, so raise the floor instead: Kokoro's output peaks at 0 dBFS but averages -18.4 dBFS, and
 peak-normalising plus 3:1 compression above -12 dB buys a measured **+4.1 dB RMS** with the
 peak unchanged. Measure RMS, not peak, before concluding you need a bigger speaker.
 
@@ -183,6 +183,20 @@ really ~1.4s and the reopen window expired on timer drift. The first version of 
 the product was innocent. `--test-pause` checks both directions - a short pause must rejoin, and a long
 gap must still produce two turns, because gluing every utterance together would be a worse bug than the
 one being fixed.
+
+**⚠️ Daemon 1.10.0 moves that ceiling, so the paragraph above is version-scoped.** Upstream
+added an audio firmware (2.1.4) that *"raises the maximum speaker volume by 6 dB"*, plus a
+daemon-side 10-band graphic EQ that *"compensates for the 'boxy' resonance of the plastic head
+shell - cutting the low-mid bass boom and lifting the muffled 1-8 kHz presence range"*. That is
+more headroom than `Loudify`'s compression buys (+4.1 dB RMS), and it is real headroom rather
+than compression - so on 1.10.0 the compressor should be re-evaluated and probably backed off,
+which is a quality gain in itself. The same firmware also fixes a regression where the
+microphone stopped emitting audio after a USB reset.
+
+🔴 **Treat it as a recipe change, not a free upgrade.** The EQ deliberately alters the frequency
+response, and N's cloned voice was signed off BY EAR through the current response. Update, then
+re-listen before trusting any of the voice tuning. `speaker_eq_gains` can be set to all `0.0` to
+bypass the EQ if it turns out to hurt a cloned voice.
 
 **`play_sound` only queues.** It returns as soon as playback is accepted, not when it
 finishes, so starting the next clip cuts the previous one off. A reply synthesised sentence
