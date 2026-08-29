@@ -424,6 +424,13 @@ public sealed class RoseConversation : IAsyncDisposable
             found = CharacterLibrary.All.FirstOrDefault(
                 c => c.Mishearings.Contains(slot, StringComparer.OrdinalIgnoreCase));
 
+        // Last, ask how the word SOUNDS. The lists above carry spellings, and spellings of
+        // one sound are unbounded - Khan alone had five. This catches the ones nobody has
+        // typed out yet, and only on an EXACT phonetic match, which is the threshold every
+        // rejected alias ("me" for V, "on" for Khan) sits clear of.
+        if (found is null && slot.Length > 0)
+            found = NameSounds.Find(slot);
+
         return found is null || found.Name == current.Name ? null : found;
     }
 

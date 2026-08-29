@@ -1454,6 +1454,19 @@ if (args.Contains("--test-speech"))
         ("can you be can", "Khan"),                // her natural pronunciation
         ("can you be kon", "Khan"),                // the one she was taught mid-session
 
+        // ---- resolved by SOUND, not by any listed spelling --------------------------
+        // None of these appear in any Mishearings list. They resolve because they are
+        // pronounced exactly like the name, which is the point: spellings of one sound are
+        // unbounded and the list can never be finished.
+        ("can you be kahnn", "Khan"),
+        ("can you be cinn", "Cyn"),
+        ("can you be dahl", "Doll"),
+
+        // ...and the rejected ones must STAY rejected. Both sit one phone from a name, so
+        // they are the exact cases a looser phonetic threshold would wrongly reinstate.
+        ("can you be me", null),                   // one phone from V
+        ("can you be on my team", null),           // one phone from Khan
+
         // Recognition returns "can you beat that" for "can you be Thad". A plain substring
         // cue matches "can you be" inside "can you BEAT that" and leaves "at" in the name
         // slot, so the cue has to end on a word boundary - otherwise this resolves, and so

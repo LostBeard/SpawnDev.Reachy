@@ -335,3 +335,79 @@ public static class CharacterLibrary
         return null;
     }
 }
+
+/// <summary>
+/// Resolves a spoken word to a character by how it SOUNDS rather than how it is spelled.
+/// </summary>
+/// <remarks>
+/// The alias lists were quietly solving the wrong problem. Khan carried "khan", "kahn",
+/// "kon", "con", "conn" - five entries that are ONE SOUND, kɑːn. Spellings are unbounded,
+/// so that list could never be finished: "kohn" and "cahn" were still missing, and the next
+/// recogniser update would invent another. TJ put it best - this is why he prefers maths.
+///
+/// Phonemising both sides collapses all of them into one rule, and covers spellings nobody
+/// has seen yet.
+///
+/// ⚠️ EXACT match only, and that threshold is measured, not chosen for taste. Every word
+/// deliberately REJECTED as an alias sits at phone distance 1 or more from its nearest
+/// name - "me" is one phone from V, "on" is one phone from Khan - so anything looser
+/// immediately reinstates the exact false positives that were argued down. Nothing rejected
+/// sits at 0. The safe threshold happens to be the strict one.
+///
+/// This does NOT replace <see cref="Character.Mishearings"/>. Those are genuine
+/// mishearings - different SOUNDS, not different spellings ("using" is three phones from
+/// "Uzi", "sad" one from "Thad") - and no phonetic rule reaches them safely.
+/// </remarks>
+internal static class NameSounds
+{
+    // The phonemizer reads an embedded dictionary at construction, so it is built once and
+    // only if something actually asks. ToSymbols keeps per-call state (LastUnknownWords),
+    // so it is not safe to call concurrently - hence the lock.
+    private static readonly Lazy<Table> Sounds = new(Build, LazyThreadSafetyMode.ExecutionAndPublication);
+    private static readonly object Gate = new();
+
+    private sealed record Table(SpawnDev.Phonemizer.EnglishPhonemizer Phonemizer,
+                                Dictionary<string, Character> BySound);
+
+    private static Table Build()
+    {
+        var phonemizer = SpawnDev.Phonemizer.EmbeddedData.CreatePhonemizer();
+        var bySound = new Dictionary<string, Character>(StringComparer.Ordinal);
+        foreach (var c in CharacterLibrary.All)
+        {
+            var sound = Pronounce(phonemizer, c.Name);
+            // First writer wins: if two characters ever sounded identical, resolving by
+            // sound could not tell them apart, so the second must not silently displace
+            // the first.
+            if (sound.Length > 0) bySound.TryAdd(sound, c);
+        }
+        return new Table(phonemizer, bySound);
+    }
+
+    /// <summary>Phones for a word, with stress marks dropped - emphasis is not identity.</summary>
+    private static string Pronounce(SpawnDev.Phonemizer.EnglishPhonemizer phonemizer, string word) =>
+        string.Concat(phonemizer.ToSymbols(word)).Replace("\u02c8", "").Replace("\u02cc", "").Trim();
+
+    /// <summary>
+    /// The character whose name is pronounced exactly like <paramref name="word"/>, or null.
+    /// </summary>
+    public static Character? Find(string? word)
+    {
+        if (string.IsNullOrWhiteSpace(word)) return null;
+        try
+        {
+            lock (Gate)
+            {
+                var table = Sounds.Value;
+                var sound = Pronounce(table.Phonemizer, word);
+                return sound.Length > 0 && table.BySound.TryGetValue(sound, out var c) ? c : null;
+            }
+        }
+        catch
+        {
+            // Sounding a word out is an ENHANCEMENT to name matching. If the dictionary
+            // cannot load, spoken names must still work off the spellings already listed.
+            return null;
+        }
+    }
+}
