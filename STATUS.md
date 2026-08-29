@@ -48,9 +48,10 @@ Robot parked: centred, `goto_sleep`, motors **disabled**, tracking off, 0 loop e
 Zero-shot ZipVoice draws fresh noise for every render, so the same sentence occasionally
 comes back as a different sentence. It is a property of the model, not of the text, so no
 reference or phoneme tuning removes it - the only reliable detector is to LISTEN to the
-render. Rose now does: every cloned line is transcribed by the recogniser already loaded
-for her microphone, scored against the words she was asked to say, and drawn again if they
-do not match. `--no-verify` turns it off for an A/B by ear.
+render. Rose now does: every cloned line is transcribed, scored against the words she was
+asked to say, and drawn again if they do not match. The recogniser is deliberately NOT the
+microphone's - see below, that choice is the whole finding. `--no-verify` turns it off for
+an A/B by ear.
 
 **Measured in N's voice (`--test-verify`), on the production recogniser:**
 
@@ -118,6 +119,32 @@ A verified render is cached exactly as before. One that failed every draw is spo
 for the session, but never written to the durable cache - a bad draw stored by content would
 be replayed in every future session, which is how a single too-deep render of the greeting
 once became "she always greets in the wrong voice".
+
+## Parking, and what re-draws actually cost - 2026-08-29 (TJ-confirmed on the robot)
+
+**Park via home.** `RoseConversation` disposal now goes **home -> wait -> goto_sleep -> wait -> motors
+off**. `goto_sleep` starts from wherever the robot is, and speaking leaves the head lifted clear of the
+speaker, so sleeping from there threw the head back. TJ, watching: *"She parked beautifully and elegantly
+as usual when we do it that way."* `--park` re-measures the trajectory; `--park --no-home` reproduces the
+old behaviour. Home does not REPLACE goto_sleep - motor power can only be cut cleanly from the sleep pose.
+
+**The word check is not what costs draws.** Now that rejections are attributed:
+
+| | |
+|---|---|
+| draws thrown away over 48 lines | 47 |
+| ...for PITCH | **46** |
+| ...for WORDS | **1** |
+| word rejections across a whole live conversation | **0** |
+
+So speaking verification costs one transcription per line (~390ms) and essentially never forces a second
+render. **The pitch guard is the entire re-draw cost**, at roughly 2 draws per line.
+
+⚠️ **Open, and TJ's call:** one live line ("I'll try to blend in!") failed the pitch band on ALL FIVE
+draws - it was spoken as best-of-five but marked UNVERIFIED, so it never reached the durable cache. Short
+excited lines look like the case that runs past N's ceiling of 210Hz. That ceiling was tuned BY EAR and is
+what stopped N drifting into an adult woman mid-conversation, so it must not be loosened on a hunch - the
+next step is to measure the f0 distribution of N's renders against the band and decide from data.
 
 ## Projects
 

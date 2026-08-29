@@ -343,7 +343,8 @@ public sealed class RoseVoice : IDisposable
             if (result.Attempts > 1 || !result.Accepted)
                 Log?.Invoke(
                     $"render {(result.Accepted ? "ok" : "UNVERIFIED")} after {result.Attempts} "
-                  + $"attempt{(result.Attempts == 1 ? "" : "s")}"
+                  + $"attempt{(result.Attempts == 1 ? "" : "s")} "
+                  + $"({result.PitchRejects} pitch, {result.WordRejects} words)"
                   + (result.WordsChecked ? $", heard {result.WordErrorRate:P0} wrong: \"{result.Transcript}\"" : "")
                   + $" - \"{text}\"");
 

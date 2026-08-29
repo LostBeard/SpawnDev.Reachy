@@ -482,6 +482,13 @@ public sealed class RoseConversation : IAsyncDisposable
             // watching the head pose stop changing.
             try
             {
+                // Home FIRST, then sleep. goto_sleep starts from wherever the robot is, and
+                // speaking leaves the head LIFTED clear of the speaker - going to sleep from
+                // there throws the head back on the way down. From home it lowers straight
+                // into the chest, which is how this is meant to look.
+                await _robot.GoHomeAsync(duration: 1.0);
+                await WaitForHeadStillAsync(TimeSpan.FromSeconds(2));
+
                 await _robot.GotoSleepAsync();
                 await WaitForHeadStillAsync(TimeSpan.FromSeconds(4));
             }

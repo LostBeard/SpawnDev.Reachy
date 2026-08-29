@@ -161,6 +161,29 @@ public class ReachyMiniClient : IDisposable
     }
 
     /// <summary>
+    /// Moves the robot to its home pose: head centred and level, antennas neutral, torso square.
+    /// </summary>
+    /// <remarks>
+    /// Worth doing before <see cref="GotoSleepAsync"/>. The sleep move starts from wherever the robot
+    /// happens to be, and from a lifted or turned pose - which is exactly where speaking leaves the head,
+    /// since it lifts clear of the speaker to talk - it throws the head back on its way down. From home it
+    /// lowers straight into the chest.
+    ///
+    /// Like every move, this returns as soon as the daemon has QUEUED it.
+    /// </remarks>
+    /// <param name="duration">Seconds to take getting there.</param>
+    /// <param name="ct">Cancels the request.</param>
+    /// <returns>A handle to the QUEUED move.</returns>
+    public Task<MoveHandle?> GoHomeAsync(double duration = 1.0, CancellationToken ct = default) =>
+        GotoAsync(
+            bodyYaw: 0,
+            headPose: new XyzRpyPose(),
+            antennas: (0, 0),
+            duration: duration,
+            interpolation: Interpolation.MinJerk,
+            ct: ct);
+
+    /// <summary>
     /// Lowers the robot into its shell, the daemon's own resting move.
     /// </summary>
     /// <remarks>

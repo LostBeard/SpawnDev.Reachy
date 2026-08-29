@@ -61,6 +61,7 @@ Run these instead of asking a child to find your bugs for you.
 | `--test-verify` | whether Rose listening to her own render catches a garbled one, and what the check costs |
 | `--test-speech` | sentence splitting, action stripping, switch-intent gating |
 | `--test-body` | every gesture, driven by real stage directions the model produced |
+| `--park` | the shutdown sequence alone, with the head pose at each stage (`--no-home` for the old behaviour) |
 | `--probe-limits` | measures the real joint travel by commanding past it and reading back |
 | `--test-mic` | audio link with a live level meter |
 | `--test-voice` / `--test-loudness` / `--test-posture` | speech output, compression A/B, head position A/B |
@@ -147,6 +148,20 @@ audio. Changing the sentence took the same control to 0%.
 recogniser wants 16kHz; passing the clip's true rate is enough, and it logs
 `Creating a resampler: in_sample_rate: 24000 output_sample_rate: 16000` when it does. No
 resampling code is needed on this side - which is worth knowing before writing one.
+
+**Park via HOME, then sleep.** `goto_sleep` starts from wherever the robot IS, and speaking leaves the
+head LIFTED clear of the chest speaker - sleeping from there throws the head back on the way down. Going
+home first (head centred and level, antennas neutral, torso square) means it lowers straight into the
+chest. Measured with `--park`: lifted Z=+0.0216 -> home 0.0000 -> asleep Z=-0.0439 pitch +0.446, and
+cutting motor power from the sleep pose relaxes only **3.2 degrees**. Home is a way station on the path to
+sleep, never a substitute - a neutral head-up pose is not mechanically stable and the head drops.
+`--park --no-home` reproduces the old behaviour.
+
+**The pitch guard, not the word check, is what costs re-draws.** Measured over 48 lines: 47 draws thrown
+away, **46 for pitch and 1 for words** - and across a whole live conversation the word check rejected
+nothing at all. Speaking verification costs a transcription per line (~390ms) and almost never forces a
+second render. If render latency needs to come down, the pitch band is the lever; the word check is not.
+`--test-verify` prints the split, so this is checkable rather than assumed.
 
 **`play_sound` only queues.** It returns as soon as playback is accepted, not when it
 finishes, so starting the next clip cuts the previous one off. A reply synthesised sentence

@@ -175,6 +175,8 @@ internal static class SpeechVerification
         var plainDraws = 0;
         var verifiedDraws = 0;
         var verifyTranscriptions = 0;
+        var pitchRejects = 0;
+        var wordRejects = 0;
 
         foreach (var text in Fixtures)
         {
@@ -199,6 +201,8 @@ internal static class SpeechVerification
                 verifiedRenderMs += sw.Elapsed.TotalMilliseconds;
                 verifiedDraws += verified.Attempts;
                 verifyTranscriptions += transcriptions - transcriptionsBefore;
+                pitchRejects += verified.PitchRejects;
+                wordRejects += verified.WordRejects;
 
                 string verdict;
                 if (plainError <= tolerance) { alreadyFine++; verdict = "already fine"; }
@@ -249,6 +253,13 @@ internal static class SpeechVerification
                             + "Raise --trials before quoting it.");
         Console.WriteLine($"pitch     : {pitchOnlyFailures} line{(pitchOnlyFailures == 1 ? "" : "s")} where EVERY draw failed the pitch guard, "
                         + "so the words were never measured");
+
+        // WHY a line cost extra draws, which is the only thing that says which guard to
+        // spend effort on. A line costing five draws says nothing without this split.
+        var rejects = pitchRejects + wordRejects;
+        Console.WriteLine($"rejects   : {rejects} draw{(rejects == 1 ? "" : "s")} thrown away - "
+                        + $"{pitchRejects} for PITCH, {wordRejects} for WORDS "
+                        + $"({(rejects == 0 ? 0 : pitchRejects / (double)rejects):P0} of the re-draws are the pitch guard)");
         // Per LINE, which is what a listener waits for, and per DRAW underneath it, because
         // a line can cost several draws before one is kept.
         var plainPerLine = plainRenderMs / Math.Max(1, total);

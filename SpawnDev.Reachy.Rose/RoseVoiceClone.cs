@@ -203,9 +203,18 @@ public sealed class RoseVoiceClone : IDisposable
     /// <param name="WordsVerified">What came back was the line that was asked for.</param>
     /// <param name="WordErrorRate">How much of the kept render came back wrong, when checked.</param>
     /// <param name="Transcript">What the recogniser heard in the kept render, when checked.</param>
+    /// <param name="PitchRejects">Draws thrown away for drifting out of the speaker's pitch band.</param>
+    /// <param name="WordRejects">Draws thrown away for coming back as the wrong words.</param>
+    /// <remarks>
+    /// The two reject counts are separated deliberately. A line that cost five draws says nothing about
+    /// WHY without them, and the two have completely different cures - a narrow pitch band versus a
+    /// tolerance that a proper noun cannot clear. Guessing which one is happening would optimise the
+    /// wrong guard.
+    /// </remarks>
     public readonly record struct CloneResult(
         byte[] Pcm, int Attempts, bool PitchInRange,
-        bool WordsChecked, bool WordsVerified, double WordErrorRate, string Transcript)
+        bool WordsChecked, bool WordsVerified, double WordErrorRate, string Transcript,
+        int PitchRejects = 0, int WordRejects = 0)
     {
         /// <summary>True when every guard that ran was satisfied by the render being returned.</summary>
         public bool Accepted => PitchInRange && (!WordsChecked || WordsVerified);
@@ -279,6 +288,8 @@ public sealed class RoseVoiceClone : IDisposable
         var bestRank = (PitchDistance: double.MaxValue, WordError: double.MaxValue);
 
         var draws = MaxRerolls + 1;
+        var pitchRejects = 0;
+        var wordRejects = 0;
         for (var attempt = 1; attempt <= draws; attempt++)
         {
             var (pcm, samples) = GenerateOnce(text, padded, referenceSampleRate, referenceText, speed);
@@ -304,9 +315,12 @@ public sealed class RoseVoiceClone : IDisposable
                 wordsOk = wordError <= MaxWordError;
             }
 
+            if (pitchDistance > 0) pitchRejects++;
+            else if (wordsChecked && !wordsOk) wordRejects++;
+
             var candidate = new CloneResult(
                 pcm, attempt, PitchInRange: pitchDistance <= 0,
-                wordsChecked, wordsOk, wordError, transcript);
+                wordsChecked, wordsOk, wordError, transcript, pitchRejects, wordRejects);
 
             if (candidate.Accepted) return candidate;
 
@@ -325,7 +339,7 @@ public sealed class RoseVoiceClone : IDisposable
         // Attempts reports how many draws this LINE cost, not which draw is being
         // returned: a caller measuring the price of the guards needs the work done, and
         // reporting the winning index would quietly under-count every failed line.
-        return best with { Attempts = draws };
+        return best with { Attempts = draws, PitchRejects = pitchRejects, WordRejects = wordRejects };
     }
 
     private (byte[] Pcm, float[] Samples) GenerateOnce(string text, float[] paddedReference, int referenceSampleRate, string referenceText, float speed)

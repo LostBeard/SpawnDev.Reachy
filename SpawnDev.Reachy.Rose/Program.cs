@@ -217,6 +217,59 @@ if (args.Contains("--audition"))
     return await VoiceCandidates.AuditionAsync(args);
 }
 
+if (args.Contains("--park"))
+{
+    // The shutdown sequence on its own, so the park can be watched without sitting
+    // through a whole conversation. Deliberately leaves the head LIFTED first, which is
+    // where speaking leaves it - that is the pose the old sequence threw the head back
+    // from on its way to sleep.
+    //   --park [ip] [--no-home]   (--no-home reproduces the old, abrupt behaviour)
+    var parkIp = args.FirstOrDefault(a => !a.StartsWith("--") && a.Contains('.')) ?? "192.168.1.170";
+    using var parkRobot = new ReachyMiniClient(parkIp);
+
+    async Task ShowPoseAsync(string label)
+    {
+        try
+        {
+            var p = await parkRobot.GetHeadPoseAsync();
+            Console.WriteLine(p is null
+                ? $"  {label,-14} (pose unavailable)"
+                : $"  {label,-14} Z={p.Z,8:F4}  pitch={p.Pitch,7:F3}  roll={p.Roll,7:F3}  yaw={p.Yaw,7:F3}");
+        }
+        catch (Exception ex) { Console.WriteLine($"  {label,-14} pose read failed: {ex.Message}"); }
+    }
+
+    Console.WriteLine($"Parking Rose at {parkIp}"
+                    + (args.Contains("--no-home") ? " WITHOUT the home step (old behaviour)" : " via home, then sleep"));
+    await parkRobot.SetMotorModeAsync(MotorMode.Enabled);
+    await parkRobot.WakeUpAsync();
+    await Task.Delay(2500);
+    await ShowPoseAsync("awake");
+
+    // Put the head where speaking leaves it: lifted clear of the speaker.
+    await parkRobot.GotoAsync(headPose: new XyzRpyPose(Z: RoseVoice.MaxHeadLift, Pitch: -0.05),
+                              duration: 0.6, interpolation: Interpolation.EaseInOut);
+    await Task.Delay(1200);
+    await ShowPoseAsync("lifted");
+
+    if (!args.Contains("--no-home"))
+    {
+        await parkRobot.GoHomeAsync(duration: 1.0);
+        await Task.Delay(1500);
+        await ShowPoseAsync("home");
+    }
+
+    await parkRobot.GotoSleepAsync();
+    await Task.Delay(3000);
+    await ShowPoseAsync("asleep");
+
+    await parkRobot.SetMotorModeAsync(MotorMode.Disabled);
+    await Task.Delay(600);
+    await ShowPoseAsync("motors off");
+    Console.WriteLine("Parked. Watch whether the head lowers into the chest or throws back.");
+    return 0;
+}
+
 if (args.Contains("--test-verify"))
 {
     // Measures whether Rose listening to her own render actually stops her speaking
