@@ -164,6 +164,9 @@ public sealed class RoseEars : IAsyncDisposable
                     }
                     _vad.Flush();
                     Drain(ct);
+                    // Nothing more is coming, so a turn still held open is as finished as
+                    // it will ever be.
+                    CommitPending();
                     continue;
                 }
 
@@ -173,8 +176,15 @@ public sealed class RoseEars : IAsyncDisposable
                     // speech can never surface as a stale utterance afterwards.
                     _framed = 0;
                     _vad.Clear();
+                    // Commit rather than discard: the words were really said, and Rose is
+                    // about to speak, so nothing further can arrive to continue them.
+                    CommitPending();
                     continue;
                 }
+
+                // A held turn is waiting on a clock, and audio is the only thing that wakes
+                // this loop - so the window is checked as samples flow past.
+                CommitPendingIfDue();
 
                 // The detector wants exact 512-sample frames; RTP hands us 320.
                 var pcm = work.Pcm;
@@ -193,6 +203,161 @@ public sealed class RoseEars : IAsyncDisposable
         catch (OperationCanceledException) { /* shutting down */ }
         catch (Exception ex) { Log?.Invoke($"ears worker died: {ex.GetType().Name}: {ex.Message}"); }
     }
+
+    // ---- soft-ended turns ------------------------------------------------------------
+    //
+    // Half a second of silence used to COMMIT a turn irrevocably. People do not talk like
+    // that: they pause to think, to choose a word, to decide how to pronounce a name. Aubs
+    // paused before "Khan" - she had just been told it is "kon" after saying "can" - and
+    // the turn closed on "can you be", dropping the name into a second utterance nobody
+    // read. She simply did not get the character she asked for.
+    //
+    // So a turn that looks UNFINISHED is now soft-ended rather than committed: it waits
+    // briefly, and speech arriving in that window REOPENS it and is appended. This is the
+    // shape huggingface/speech-to-speech uses (a soft-ended, reopenable turn with a grace
+    // for incomplete turns and a hard ceiling); the timings below are theirs rather than
+    // numbers I made up.
+    //
+    // ⚠️ The grace applies ONLY to turns that look unfinished. A normal sentence commits
+    // the instant it always did, so the conversation does not get slower to fix a case
+    // that is not happening.
+
+    /// <summary>
+    /// How long a soft-ended turn waits for the rest of the sentence.
+    /// </summary>
+    /// <remarks>
+    /// Longer than the 600ms huggingface/speech-to-speech uses, and deliberately so: the
+    /// grace does not start until the DETECTOR has closed the segment, and ours needs
+    /// <see cref="VadModelConfig"/>'s 500ms of silence to do that. So the pause a speaker
+    /// can actually take is 500ms + this, where theirs is 64ms + theirs. 1200 gives about
+    /// 1.7s of real thinking time, which covers "can you be... Khan" from someone deciding
+    /// how to pronounce it. Only turns that already look unfinished ever wait.
+    /// </remarks>
+    private static readonly TimeSpan ReopenGrace = TimeSpan.FromMilliseconds(1200);
+
+    /// <summary>
+    /// Hard ceiling on holding a turn, however much it keeps looking unfinished.
+    /// </summary>
+    /// <remarks>
+    /// Without this a speaker who keeps trailing off could hold a turn open forever, and
+    /// Rose would simply stop answering. Better to reply to a half-sentence than to go
+    /// silent.
+    /// </remarks>
+    private static readonly TimeSpan MaxHold = TimeSpan.FromSeconds(4);
+
+    private string? _pending;
+    private DateTime _pendingSince;
+    private DateTime _pendingDue;
+
+    /// <summary>
+    /// Takes a finished segment and either commits it or holds it open for the rest.
+    /// </summary>
+    private void Offer(string text)
+    {
+        var now = DateTime.UtcNow;
+
+        if (_pending is null)
+        {
+            if (!LooksUnfinished(text)) { Emit(text); return; }
+            _pending = text;
+            _pendingSince = now;
+            _pendingDue = now + ReopenGrace;
+            Log?.Invoke($"turn held open (looks unfinished): \"{text}\"");
+            return;
+        }
+
+        // Speech arrived inside the window, so the turn reopens and this continues it.
+        _pending = $"{_pending} {text}";
+        Log?.Invoke($"turn reopened -> \"{_pending}\"");
+
+        if (!LooksUnfinished(_pending) || now - _pendingSince >= MaxHold) CommitPending();
+        else _pendingDue = now + ReopenGrace;
+    }
+
+    /// <summary>Commits a held turn once its window has passed. Called as audio flows.</summary>
+    /// <remarks>
+    /// ⚠️ Speech happening RIGHT NOW pushes the window back, and that is load-bearing rather
+    /// than a refinement. The continuation does not become readable the moment it is
+    /// spoken: the detector still needs its 500ms of silence to close that segment, and
+    /// then it has to be transcribed. Timing the grace purely on the clock therefore
+    /// expired it while the speaker was mid-word - measured, the turn committed before
+    /// "Khan" ever arrived, which is the exact bug this exists to fix. Resumed speech IS
+    /// the reopen signal; silence is the only thing that should run the clock down.
+    /// </remarks>
+    private void CommitPendingIfDue()
+    {
+        if (_pending is null) return;
+
+        var now = DateTime.UtcNow;
+
+        if (_vad.IsSpeechDetected())
+        {
+            // They are still talking. Hold, but never past the ceiling.
+            if (now - _pendingSince < MaxHold) _pendingDue = now + ReopenGrace;
+            else CommitPending();
+            return;
+        }
+
+        if (now >= _pendingDue || now - _pendingSince >= MaxHold) CommitPending();
+    }
+
+    private void CommitPending()
+    {
+        var text = _pending;
+        _pending = null;
+        if (text is not null) Emit(text);
+    }
+
+    private void Emit(string text) => OnUtterance?.Invoke(text);
+
+    /// <summary>
+    /// Whether an utterance reads as cut off mid-sentence.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately lexical rather than a model. Semantic end-of-turn detection is the
+    /// general answer to this problem and it needs a classifier reading partial
+    /// transcripts; the cheap 95% is that English sentences do not END on a function word.
+    /// "can you be", "what is", "I want to" are all obviously unfinished, and a real
+    /// sentence almost never closes on one of these.
+    ///
+    /// ⚠️ Punctuation is NOT a usable signal here, which is worth recording because it is
+    /// the obvious idea: recognition returned "Can you be?" - complete with a question
+    /// mark - for a sentence that was missing its last word entirely.
+    /// </remarks>
+    internal static bool LooksUnfinished(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return false;
+
+        var words = text.ToLowerInvariant().Split(
+            [' ', '\t', '\n', ',', '.', '!', '?', ';', ':', '"', '\'', '(', ')', '-'],
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (words.Length == 0) return false;
+
+        return DanglingWords.Contains(words[^1]);
+    }
+
+    /// <summary>
+    /// Words an English sentence does not end on, so hearing one last means the rest is
+    /// still coming.
+    /// </summary>
+    /// <remarks>
+    /// Kept to words that are genuinely never terminal. "be" earns its place from the
+    /// live failure ("can you be" + "Khan"); the articles, prepositions and auxiliaries
+    /// around it are the same class. Words that CAN legitimately end a sentence stay out,
+    /// however common - "it", "me", "here", "now", "too" - because holding those would
+    /// delay ordinary replies for nothing.
+    /// </remarks>
+    private static readonly HashSet<string> DanglingWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "a", "an", "the", "my", "your", "our", "their", "his", "her", "its",
+        "be", "is", "am", "are", "was", "were", "been", "being",
+        "do", "does", "did", "have", "has", "had",
+        "can", "could", "will", "would", "shall", "should", "may", "might", "must",
+        "to", "of", "for", "with", "from", "into", "onto", "about", "than", "as",
+        "and", "or", "but", "so", "if", "because", "that", "which", "who", "whose",
+        "very", "really", "more", "most", "some", "any", "every", "each", "another",
+        "what", "wanna", "gonna", "like",
+    };
 
     /// <summary>Transcribes every segment the detector has finished with.</summary>
     private void Drain(CancellationToken ct)
@@ -238,7 +403,7 @@ public sealed class RoseEars : IAsyncDisposable
         Log?.Invoke($"heard {seconds:F1}s -> \"{text}\" ({sw.ElapsedMilliseconds}ms)");
 
         if (IsNoise(text)) return;
-        OnUtterance?.Invoke(text);
+        Offer(text);
     }
 
     /// <summary>

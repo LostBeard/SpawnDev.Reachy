@@ -59,6 +59,7 @@ Run these instead of asking a child to find your bugs for you.
 | `--test-brain` | the language model alone, with latency per reply |
 | `--test-names` | what recognition ACTUALLY returns for each character name (synthesised adult voices) |
 | `--names-live` | the same, with a REAL person through the robot's mic; prints the aliases to add (`--simulate` for no robot) |
+| `--test-pause` | whether a paused sentence rejoins - and whether two separate ones stay apart |
 | `--test-verify` | whether Rose listening to her own render catches a garbled one, and what the check costs |
 | `--test-speech` | sentence splitting, action stripping, switch-intent gating |
 | `--test-body` | every gesture, driven by real stage directions the model produced |
@@ -163,6 +164,25 @@ away, **46 for pitch and 1 for words** - and across a whole live conversation th
 nothing at all. Speaking verification costs a transcription per line (~390ms) and almost never forces a
 second render. If render latency needs to come down, the pitch band is the lever; the word check is not.
 `--test-verify` prints the split, so this is checkable rather than assumed.
+
+**A pause mid-sentence used to lose the rest of it.** Half a second of silence COMMITTED a turn, so
+"can you be... Khan" closed on the pause and dropped the name into a second utterance nobody read - the
+character switch just silently failed. A turn that looks unfinished (ends on a word English sentences do
+not end on) is now soft-ended instead: it waits, and speech arriving in that window reopens it and is
+appended. Only unfinished-looking turns ever wait, so ordinary replies are no slower.
+
+⚠️ Two things this cost to get right. **Punctuation is not a completeness signal** - recognition returned
+"Can you be?", question mark and all, for a sentence missing its last word. And **speech resuming has to
+extend the window, not just the clock**: a continuation is not readable the moment it is spoken, because
+the detector still needs its own 500ms of silence to close that segment and then it has to be
+transcribed. Timing the grace purely on the clock expired it mid-word.
+
+⚠️ And a trap in the TEST rather than the code: a simulated microphone must be paced against a real
+clock. Feeding blocks with `await Task.Delay(20)` sleeps ~31ms each on Windows, so a "900ms gap" was
+really ~1.4s and the reopen window expired on timer drift. The first version of this test failed while
+the product was innocent. `--test-pause` checks both directions - a short pause must rejoin, and a long
+gap must still produce two turns, because gluing every utterance together would be a worse bug than the
+one being fixed.
 
 **`play_sound` only queues.** It returns as soon as playback is accepted, not when it
 finishes, so starting the next clip cuts the previous one off. A reply synthesised sentence

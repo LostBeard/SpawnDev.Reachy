@@ -533,6 +533,105 @@ if (args.Contains("--probe-limits"))
     return 0;
 }
 
+if (args.Contains("--test-pause"))
+{
+    // Does a PAUSED sentence survive? "can you be... Khan" closes the detector's turn on
+    // the pause and drops the name into a second utterance - Aubs lost Khan to exactly
+    // this. A soft-ended turn should reopen and join them.
+    //
+    // Both directions are tested. Gluing every utterance together would pass the first
+    // case and be a worse bug than the one being fixed, so a LONG gap must still produce
+    // two separate turns.
+    //   --test-pause
+    var pauseSynth = new KokoroSharp.Utilities.KokoroWavSynthesizer(
+        Path.Combine(Directory.GetCurrentDirectory(), "kokoro.onnx"));
+    var pauseVoice = KokoroSharp.KokoroVoiceManager.GetVoice("af_sarah");
+    await using var pauseEars = new RoseEars(ModelDir());
+
+    var utterances = new List<string>();
+    var pauseClock = System.Diagnostics.Stopwatch.StartNew();
+    pauseEars.OnUtterance += t => { lock (utterances) utterances.Add(t); };
+    pauseEars.OnUtterance += t => Console.WriteLine($"      [{pauseClock.ElapsedMilliseconds,6}ms] EMIT \"{t}\"");
+    pauseEars.Log += m => Console.WriteLine($"      [{pauseClock.ElapsedMilliseconds,6}ms] {m}");
+
+    // ⚠️ Paced against a REAL CLOCK, not by accumulating Task.Delay(20).
+    //
+    // The naive version sleeps ~31ms per 20ms block on Windows, so a "900ms gap" is really
+    // ~1.4s of wall time and a 3.7s clip takes 7s to deliver. The reopen window is measured
+    // in wall time, so that drift alone expired it - the first version of this test failed
+    // and the product was innocent. A simulated microphone has to deliver audio at the rate
+    // a microphone does, or it is measuring the timer.
+    var fedSamples = 0L;
+    var feedClock = System.Diagnostics.Stopwatch.StartNew();
+
+    async Task PaceAsync(short[] pcm)
+    {
+        for (var i = 0; i < pcm.Length; i += 320)
+        {
+            pauseEars.Feed(pcm[i..Math.Min(i + 320, pcm.Length)]);
+            fedSamples += Math.Min(320, pcm.Length - i);
+            var due = TimeSpan.FromSeconds(fedSamples / (double)RoseAudioLink.OutputSampleRate);
+            var wait = due - feedClock.Elapsed;
+            if (wait > TimeSpan.Zero) await Task.Delay(wait);
+        }
+    }
+
+    async Task FeedAsync(string phrase)
+    {
+        var pcm24 = await pauseSynth.SynthesizeAsync(phrase, pauseVoice);
+        var src = new short[pcm24.Length / 2];
+        for (var i = 0; i < src.Length; i++) src[i] = BitConverter.ToInt16(pcm24, i * 2);
+        var outLen = src.Length * 2 / 3;
+        var pcm16 = new short[outLen];
+        for (var i = 0; i < outLen; i++)
+        {
+            var s = i * 3 / 2;
+            pcm16[i] = s + 1 < src.Length ? (short)((src[s] + src[s + 1]) / 2) : src[^1];
+        }
+        await PaceAsync(pcm16);
+    }
+
+    Task SilenceAsync(int ms) => PaceAsync(new short[Math.Max(1, ms * 16)]);
+
+    async Task<string[]> RunAsync(string first, string rest, int gapMs)
+    {
+        lock (utterances) utterances.Clear();
+        fedSamples = 0;
+        feedClock.Restart();
+        await SilenceAsync(400);
+        await FeedAsync(first);
+        await SilenceAsync(gapMs);
+        await FeedAsync(rest);
+        await SilenceAsync(1200);
+        pauseEars.Flush();
+        await Task.Delay(1500);
+        lock (utterances) return utterances.ToArray();
+    }
+
+    var failures = 0;
+
+    // A real thinking pause: the detector closes on it, the turn must reopen.
+    var joined = await RunAsync("Can you be", "Khan", 900);
+    var joinedOk = joined.Length == 1
+                   && joined[0].Contains("can you be", StringComparison.OrdinalIgnoreCase);
+    Console.WriteLine($"  [{(joinedOk ? "PASS" : "FAIL")}] short pause -> {joined.Length} turn(s): "
+                    + string.Join(" | ", joined.Select(u => $"\"{u}\"")));
+    if (!joinedOk) failures++;
+
+    // A long gap is two different thoughts and must stay two turns.
+    var split = await RunAsync("Can you be Uzi", "Tell me about the drones", 3500);
+    var splitOk = split.Length >= 2;
+    Console.WriteLine($"  [{(splitOk ? "PASS" : "FAIL")}] long gap    -> {split.Length} turn(s): "
+                    + string.Join(" | ", split.Select(u => $"\"{u}\"")));
+    if (!splitOk) failures++;
+
+    Console.WriteLine();
+    Console.WriteLine(failures == 0
+        ? "Paused sentences rejoin, separate thoughts stay separate."
+        : $"{failures} case(s) failed.");
+    return failures == 0 ? 0 : 1;
+}
+
 if (args.Contains("--names-live"))
 {
     // What recognition returns for each character name when a REAL PERSON says it, through
@@ -1451,6 +1550,10 @@ if (args.Contains("--test-speech"))
         // pronunciations are already covered - "can" and "con" are both in his list - so
         // the deliberation was the only thing that cost her the turn.
         ("can you be? on", null),
+
+        // What the ears now hand over for Aubs's failed Khan: the pause split it, the turn
+        // reopened, and the halves arrive joined. --test-pause produces this exact string.
+        ("can you be? con.", "Khan"),
         ("can you be can", "Khan"),                // her natural pronunciation
         ("can you be kon", "Khan"),                // the one she was taught mid-session
 
@@ -1513,11 +1616,49 @@ if (args.Contains("--test-speech"))
     }
     Console.WriteLine($"\n{researchPass}/{researchCases.Length} research-gate cases passed");
 
+    // ---- soft-ended turns: does an utterance read as cut off mid-sentence? -------------
+    // This decides when EVERY turn commits, so it is the riskiest heuristic in the loop.
+    // Too eager and ordinary replies are delayed; too shy and a paused sentence is
+    // truncated, which is the failure Aubs actually hit.
+    Console.WriteLine("\n  unfinished-turn detection:");
+    (string Said, bool Unfinished)[] holdCases =
+    [
+        // Genuinely cut off - the rest of the sentence is still coming.
+        ("can you be", true),
+        ("can you be?", true),               // punctuation is NOT a completeness signal
+        ("what is", true),
+        ("i want to", true),
+        ("it was really", true),
+        ("do you like the", true),
+
+        // Complete - must commit immediately, with no added delay.
+        ("can you be Uzi", false),
+        ("what is an axolotl", false),
+        ("i want an ice cream", false),
+        ("can you be me", false),            // "me" can end a sentence, so it is not held
+        ("tell me about it", false),
+        ("yes", false),
+        ("hi", false),
+        ("", false),
+    ];
+
+    var holdPass = 0;
+    foreach (var (said, expect) in holdCases)
+    {
+        var got = RoseEars.LooksUnfinished(said);
+        var ok = got == expect;
+        if (ok) holdPass++;
+        Console.WriteLine($"    [{(ok ? "PASS" : "FAIL")}] \"{said}\" -> {(got ? "hold" : "commit")}"
+                        + $"  expected {(expect ? "hold" : "commit")}");
+    }
+    Console.WriteLine($"\n{holdPass}/{holdCases.Length} unfinished-turn cases passed");
+
     var allOk = speechPass == cases.Length && sayableOk
                 && switchPass == switchCases.Length
                 && boundaryPass == boundaryCases.Length
                 && gesturePass == gestureCases.Length
-                && researchPass == researchCases.Length;
+                && researchPass == researchCases.Length
+                && holdPass == holdCases.Length;
     return allOk ? 0 : 1;
 }
 
