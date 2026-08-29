@@ -1,6 +1,3 @@
-using System.Buffers;
-using System.Net.WebSockets;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -24,7 +21,7 @@ namespace SpawnDev.Reachy;
 /// </remarks>
 public sealed class GstSignallingClient : IAsyncDisposable
 {
-    private readonly ClientWebSocket _ws = new();
+    private readonly ISignalingSocket _socket;
     private readonly Uri _uri;
 
     /// <summary>Our own peer id, assigned by the server in the welcome message.</summary>
@@ -39,15 +36,27 @@ public sealed class GstSignallingClient : IAsyncDisposable
     /// <summary>Raised for each remote ICE candidate: (candidate, sdpMLineIndex).</summary>
     public event Action<string, int>? OnIceCandidate;
 
-    public GstSignallingClient(string hostOrIp, int port = 8443)
+    /// <param name="hostOrIp">Robot host or IP.</param>
+    /// <param name="port">Signalling port (default 8443).</param>
+    /// <param name="socket">
+    /// Transport to use. Defaults to a real <see cref="ClientWebSocketSignalingSocket"/> (desktop). The
+    /// browser-extension host injects a background-relayed socket here, since a content script cannot open
+    /// <c>ws://</c> from an https page.
+    /// </param>
+    public GstSignallingClient(string hostOrIp, int port = 8443, ISignalingSocket? socket = null)
     {
         _uri = new Uri($"ws://{hostOrIp}:{port}");
-        _ws.Options.RemoteCertificateValidationCallback = (_, _, _, _) => true;
+        _socket = socket ?? new ClientWebSocketSignalingSocket();
     }
 
+    /// <summary>
+    /// Opens the signalling connection and completes the greeting, leaving <see cref="PeerId"/> set.
+    /// </summary>
+    /// <remarks>The server greets first, so this reads a message before sending anything.</remarks>
+    /// <exception cref="InvalidOperationException">The server sent no welcome message.</exception>
     public async Task ConnectAsync(CancellationToken ct = default)
     {
-        await _ws.ConnectAsync(_uri, ct);
+        await _socket.ConnectAsync(_uri, ct);
 
         // The server greets us before we say anything.
         var welcome = await ReceiveJsonAsync(ct)
@@ -110,7 +119,7 @@ public sealed class GstSignallingClient : IAsyncDisposable
     /// </summary>
     public async Task ReceiveLoopAsync(CancellationToken ct = default)
     {
-        while (!ct.IsCancellationRequested && _ws.State == WebSocketState.Open)
+        while (!ct.IsCancellationRequested && _socket.IsOpen)
         {
             JsonDocument? doc;
             try { doc = await ReceiveJsonAsync(ct); }
@@ -158,46 +167,41 @@ public sealed class GstSignallingClient : IAsyncDisposable
         }
     }
 
+    /// <summary>Sends our SDP answer back to the robot for the session in progress.</summary>
+    /// <param name="sdp">The answer SDP.</param>
+    /// <param name="ct">Cancels the send.</param>
     public Task SendAnswerAsync(string sdp, CancellationToken ct = default)
     {
         var msg = new SignalPeerSdp("peer", SessionId!, new SdpPayload("answer", sdp));
         return SendAsync(JsonSerializer.Serialize(msg, SignalJson.Default.SignalPeerSdp), ct);
     }
 
+    /// <summary>Sends one locally-gathered ICE candidate to the robot.</summary>
+    /// <param name="candidate">The candidate line.</param>
+    /// <param name="sdpMLineIndex">Index of the media description the candidate belongs to.</param>
+    /// <param name="ct">Cancels the send.</param>
     public Task SendIceAsync(string candidate, int sdpMLineIndex, CancellationToken ct = default)
     {
         var msg = new SignalPeerIce("peer", SessionId!, new IcePayload(candidate, sdpMLineIndex));
         return SendAsync(JsonSerializer.Serialize(msg, SignalJson.Default.SignalPeerIce), ct);
     }
 
-    private Task SendAsync(string json, CancellationToken ct) =>
-        _ws.SendAsync(Encoding.UTF8.GetBytes(json), WebSocketMessageType.Text, true, ct);
+    private Task SendAsync(string json, CancellationToken ct) => _socket.SendTextAsync(json, ct);
 
     private async Task<JsonDocument?> ReceiveJsonAsync(CancellationToken ct)
     {
-        // Messages can exceed one frame - an SDP offer is several KB.
-        var buffer = new ArrayBufferWriter<byte>();
-        var chunk = new byte[16384];
-        while (true)
-        {
-            var r = await _ws.ReceiveAsync(chunk, ct);
-            if (r.MessageType == WebSocketMessageType.Close) return null;
-            buffer.Write(chunk.AsSpan(0, r.Count));
-            if (r.EndOfMessage) break;
-        }
-        if (buffer.WrittenCount == 0) return null;
-        return JsonDocument.Parse(buffer.WrittenMemory);
+        // The transport hands back one complete text message (frame reassembly is its job) - an SDP offer
+        // is several KB and may have arrived as multiple frames.
+        var text = await _socket.ReceiveTextAsync(ct);
+        if (text == null) return null;
+        return JsonDocument.Parse(text);
     }
 
+    /// <summary>Closes and disposes the underlying signalling socket.</summary>
     public async ValueTask DisposeAsync()
     {
-        try
-        {
-            if (_ws.State == WebSocketState.Open)
-                await _ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "bye", CancellationToken.None);
-        }
-        catch { /* closing a dead socket is not interesting */ }
-        _ws.Dispose();
+        await _socket.CloseAsync();
+        await _socket.DisposeAsync();
     }
 }
 

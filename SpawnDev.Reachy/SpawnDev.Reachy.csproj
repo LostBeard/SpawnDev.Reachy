@@ -4,8 +4,8 @@
 		<TargetFrameworks>net10.0</TargetFrameworks>
 		<Nullable>enable</Nullable>
 		<ImplicitUsings>enable</ImplicitUsings>
-		<Version>0.1.0-local.1</Version>
-		<PackageReleaseNotes>0.1.0 - New</PackageReleaseNotes>
+		<Version>0.1.0-local.9</Version>
+		<PackageReleaseNotes>0.1.0-local.9 - SpokenText + GestureClassifier + ReachyBody promoted from the Rose app into the library so every host animates the robot identically.</PackageReleaseNotes>
 		<GeneratePackageOnBuild>True</GeneratePackageOnBuild>
 		<GenerateDocumentationFile>true</GenerateDocumentationFile>
 		<EmbedAllSources>true</EmbedAllSources>
@@ -19,7 +19,7 @@
 		<PackageIcon>icon-128.png</PackageIcon>
 		<RepositoryUrl>https://github.com/LostBeard/SpawnDev.Reachy.git</RepositoryUrl>
 		<RepositoryType>git</RepositoryType>
-		<PackageTags>DotNetWebAssembly;Browser;ReachyMini</PackageTags>
+		<PackageTags>Reachy;ReachyMini;Robotics;Robot;SDK;Pollen</PackageTags>
 		<NoPackageAnalysis>true</NoPackageAnalysis>
 		<EnableDefaultCompileItems>true</EnableDefaultCompileItems>
 		<IsPackable>true</IsPackable>
@@ -33,8 +33,10 @@
 	</ItemGroup>
 
 	<ItemGroup>
-		<PackageReference Include="Concentus" Version="2.2.2" />
-		<PackageReference Include="SpawnDev.SIPSorcery" Version="10.0.7" />
+		<!-- RoseAudioLink rides SpawnDev.RTC's cross-platform IRTCPeerConnection (browser + desktop),
+		     which bundles the SipSorcery fork and the PCM audio bridge. Concentus + the direct
+		     SpawnDev.SIPSorcery reference are no longer needed here. -->
+		<PackageReference Include="SpawnDev.RTC" Version="2.2.2" />
 	</ItemGroup>
 
 </Project>

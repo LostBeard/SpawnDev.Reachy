@@ -38,6 +38,40 @@ public sealed class RoseVoice : IDisposable
     /// <summary>Characters that will speak in their own show voice rather than a Kokoro voice.</summary>
     public IReadOnlyCollection<string> ClonedCharacters => _voiceprints.Keys;
 
+    /// <summary>Diagnostic log. Reports re-rolled and unverified renders.</summary>
+    public event Action<string>? Log;
+
+    /// <summary>
+    /// A recogniser to check every cloned render against the words it was asked to say.
+    /// </summary>
+    /// <remarks>
+    /// Rose listening to herself. The cloner draws fresh noise per render and some draws
+    /// come back as a different sentence entirely; giving it the recogniser that is
+    /// already loaded lets a bad draw be thrown away and redrawn instead of spoken to
+    /// Aubs. Null leaves renders unchecked, which is the behaviour without it.
+    ///
+    /// Takes samples and their sample rate, returns what was heard. Called on the render
+    /// thread, so it must be safe there.
+    /// </remarks>
+    public Func<float[], int, string>? SpeechVerifier
+    {
+        get => _clone?.Transcribe;
+        set { if (_clone is not null) _clone.Transcribe = value; }
+    }
+
+    /// <summary>
+    /// How much of a line may come back wrong before a cloned render is re-rolled, 0 to 1.
+    /// </summary>
+    /// <remarks>
+    /// Reads 1 when there is no cloner: nothing is being checked, and reporting 0 would
+    /// read as "reject everything" rather than "no check runs here".
+    /// </remarks>
+    public double MaxWordError
+    {
+        get => _clone?.MaxWordError ?? 1.0;
+        set { if (_clone is not null) _clone.MaxWordError = value; }
+    }
+
     /// <summary>
     /// Peak target after normalisation. Just under full scale, leaving a little
     /// room so the robot's own DAC does not clip on inter-sample peaks.
@@ -246,7 +280,7 @@ public sealed class RoseVoice : IDisposable
 
         var soundName = $"rose_{key}.wav";
 
-        var (pcm, rate, wasCloned) = await RenderAsync(text, character, ct);
+        var (pcm, rate, wasCloned, keepable) = await RenderAsync(text, character, ct);
         if (pcm.Length == 0) return default;
 
         // Kokoro output is clean, so compressing it is free loudness. A cloned voice is
@@ -260,9 +294,26 @@ public sealed class RoseVoice : IDisposable
         await _rose.UploadSoundAsync(soundName, ms, ct);
 
         var prepared = new PreparedSpeech(soundName, TimeSpan.FromSeconds(pcm.Length / 2.0 / rate));
+
+        // A render that failed its guards is spoken - Rose still has to answer - and it is
+        // remembered for THIS session but never written to the durable cache.
+        //
+        // Not durable, because caching is by content: a bad draw stored under its key
+        // would be replayed in every future session instead of ever being drawn again.
+        // That is exactly how one too-deep render of a fixed greeting became "she always
+        // greets in the wrong voice". Leaving it off disk buys the line a fresh draw next
+        // time Rose starts.
+        //
+        // But still held in memory, because after every draw failed, the likeliest cause
+        // is not a garbled render - best-of-five almost always finds a clean one - it is a
+        // line the recogniser cannot score well however it is said, usually one carrying a
+        // name ("Aubs", "Uzi"). Dropping it entirely would make that line pay the full
+        // re-roll loop every single time it came up, which is a far worse deal than
+        // repeating one imperfect clip.
         _prepared[key] = prepared;
         _onRobot?.Add(soundName);
-        RememberDuration(key, prepared.Duration);
+        if (keepable) RememberDuration(key, prepared.Duration);
+
         return prepared;
     }
 
@@ -276,7 +327,7 @@ public sealed class RoseVoice : IDisposable
     /// Falling back to Kokoro rather than throwing matters: a character whose
     /// reference has not been chosen yet should still talk to Aubs.
     /// </remarks>
-    private async Task<(byte[] Pcm, int Rate, bool Cloned)> RenderAsync(string text, Character character, CancellationToken ct)
+    private async Task<(byte[] Pcm, int Rate, bool Cloned, bool Keepable)> RenderAsync(string text, Character character, CancellationToken ct)
     {
         if (_clone is not null && _voiceprints.TryGetValue(character.Name, out var vp))
         {
@@ -286,13 +337,24 @@ public sealed class RoseVoice : IDisposable
             // 0 leaves that side of the guard bounded by the reference pitch alone.
             _clone.PitchCeiling = character.PitchCeilingHz ?? 0;
             _clone.PitchFloor = character.PitchFloorHz ?? 0;
-            var pcm = await Task.Run(
-                () => _clone.Clone(text, vp.Samples, vp.Rate, vp.Text, (float)character.SpeakingRate), ct);
-            return (pcm, _clone.SampleRate, true);
+            var result = await Task.Run(
+                () => _clone.CloneChecked(text, vp.Samples, vp.Rate, vp.Text, (float)character.SpeakingRate), ct);
+
+            if (result.Attempts > 1 || !result.Accepted)
+                Log?.Invoke(
+                    $"render {(result.Accepted ? "ok" : "UNVERIFIED")} after {result.Attempts} "
+                  + $"attempt{(result.Attempts == 1 ? "" : "s")}"
+                  + (result.WordsChecked ? $", heard {result.WordErrorRate:P0} wrong: \"{result.Transcript}\"" : "")
+                  + $" - \"{text}\"");
+
+            return (result.Pcm, _clone.SampleRate, true, result.Accepted);
         }
 
+        // Kokoro is not re-rolled and so is always keepable: it is deterministic, so a
+        // second render of the same line is the same audio. Listening to it could only
+        // report a problem nothing here can act on.
         var kokoroConfig = new KokoroSharp.Processing.KokoroTTSPipelineConfig { Speed = (float)character.SpeakingRate };
-        return (await _synth.SynthesizeAsync(text, GetVoice(character.Voice), kokoroConfig), KokoroRate, false);
+        return (await _synth.SynthesizeAsync(text, GetVoice(character.Voice), kokoroConfig), KokoroRate, false, true);
     }
 
     /// <summary>A stable short name for this exact line in this exact voice.</summary>

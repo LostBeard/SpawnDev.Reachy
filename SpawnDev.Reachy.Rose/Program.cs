@@ -74,7 +74,10 @@ if (args.Contains("--talk"))
 
     var cloneSteps = int.TryParse(args.FirstOrDefault(a => a.StartsWith("--steps="))?["--steps=".Length..], out var cs) ? cs : 16;
     await using var convo = new RoseConversation(
-        talkIp, ModelDir(), model, cloneVoices: args.Contains("--clone"), cloneSteps: cloneSteps);
+        talkIp, ModelDir(), model, cloneVoices: args.Contains("--clone"), cloneSteps: cloneSteps,
+        // --no-verify speaks whatever the first draw produced, which is what she did
+        // before she could hear herself. Only for comparing the two by ear.
+        verifySpeech: !args.Contains("--no-verify"));
 
     convo.OnLine += (who, what) =>
     {
@@ -106,7 +109,7 @@ if (args.Contains("--test-body"))
     using var br = new ReachyMiniClient(bodyIp);
     await br.SetMotorModeAsync(MotorMode.Enabled);
 
-    var body = new RoseBody(br);
+    var body = new ReachyBody(br);
     body.Log += m => Console.WriteLine($"  [log] {m}");
 
     string[] realActions =
@@ -212,6 +215,16 @@ if (args.Contains("--audition"))
     // by ear, and for characters the captions never label on their own (Doll).
     //   --audition --ep=E03 --from=12:34.5 --to=12:41 --reftext="exact words" [--say="..."] [--name=N]
     return await VoiceCandidates.AuditionAsync(args);
+}
+
+if (args.Contains("--test-verify"))
+{
+    // Measures whether Rose listening to her own render actually stops her speaking
+    // nonsense: renders each line once as it is today, then again with the check on,
+    // and reports how many bad draws were rescued and what the check costs.
+    // Desktop only - no robot needed.
+    //   --test-verify [--name=N] [--trials=2] [--steps=16] [--tolerance=0.2] [--ears=small.en] [--cpu]
+    return await SpeechVerification.RunAsync(args);
 }
 
 if (args.Contains("--test-clone"))
@@ -329,7 +342,7 @@ if (args.Contains("--test-idle"))
     using var ir = new ReachyMiniClient(idleIp);
     await ir.SetMotorModeAsync(MotorMode.Enabled);
 
-    var idleBody = new RoseBody(ir);
+    var idleBody = new ReachyBody(ir);
     idleBody.Log += m => Console.WriteLine($"  [log] {m}");
 
     var who = CharacterLibrary.N;
@@ -559,7 +572,8 @@ if (args.Contains("--test-loop"))
 
     await using var loop = new RoseConversation(
         loopIp, ModelDir(), useMicrophone: false, cloneVoices: args.Contains("--clone"),
-        cloneSteps: int.TryParse(args.FirstOrDefault(a => a.StartsWith("--steps="))?["--steps=".Length..], out var ls) ? ls : 16);
+        cloneSteps: int.TryParse(args.FirstOrDefault(a => a.StartsWith("--steps="))?["--steps=".Length..], out var ls) ? ls : 16,
+        verifySpeech: !args.Contains("--no-verify"));
     loop.OnLine += (who, what) =>
     {
         Console.ForegroundColor = who == "Aubs" ? ConsoleColor.Cyan : ConsoleColor.Yellow;
@@ -1278,31 +1292,31 @@ if (args.Contains("--test-speech"))
     // Stage directions drive the servos. All of these are REAL model output
     // captured from --test-loop runs, not phrasing invented to fit the classifier.
     Console.WriteLine("\n  gesture classification:");
-    (string Action, RoseBody.Gesture Expect)[] gestureCases =
+    (string Action, Gesture Expect)[] gestureCases =
     [
-        ("Antennas twitch excitedly as the torso rotates slightly", RoseBody.Gesture.Wiggle),
-        ("I bob my torso up and down enthusiastically, my antennas wiggling", RoseBody.Gesture.Bounce),
-        ("antennas wiggle excitedly", RoseBody.Gesture.Wiggle),
-        ("My antennas droop sadly", RoseBody.Gesture.Droop),
-        ("I tilt my head to one side, thinking for a moment", RoseBody.Gesture.Tilt),
-        ("I spin around in a circle, my torso rotating rapidly", RoseBody.Gesture.Spin),
-        ("Drone's head tilts to one side, concern etched on its face", RoseBody.Gesture.Tilt),
-        ("I look up in surprise", RoseBody.Gesture.LookUp),
-        ("nods enthusiastically", RoseBody.Gesture.Nod),
-        ("shakes her head", RoseBody.Gesture.Shake),
-        ("antennas perk up alertly", RoseBody.Gesture.Perk),
+        ("Antennas twitch excitedly as the torso rotates slightly", Gesture.Wiggle),
+        ("I bob my torso up and down enthusiastically, my antennas wiggling", Gesture.Bounce),
+        ("antennas wiggle excitedly", Gesture.Wiggle),
+        ("My antennas droop sadly", Gesture.Droop),
+        ("I tilt my head to one side, thinking for a moment", Gesture.Tilt),
+        ("I spin around in a circle, my torso rotating rapidly", Gesture.Spin),
+        ("Drone's head tilts to one side, concern etched on its face", Gesture.Tilt),
+        ("I look up in surprise", Gesture.LookUp),
+        ("nods enthusiastically", Gesture.Nod),
+        ("shakes her head", Gesture.Shake),
+        ("antennas perk up alertly", Gesture.Perk),
         // "head" is a noun at index 0 - the verb has to win, not the body part.
-        ("Head spins around to face Aubs, a big smile on its face", RoseBody.Gesture.Spin),
-        ("head moves", RoseBody.Gesture.Tilt),
-        ("leaning forward with interest", RoseBody.Gesture.LeanIn),
-        ("", RoseBody.Gesture.None),
-        ("says nothing in particular", RoseBody.Gesture.None),
+        ("Head spins around to face Aubs, a big smile on its face", Gesture.Spin),
+        ("head moves", Gesture.Tilt),
+        ("leaning forward with interest", Gesture.LeanIn),
+        ("", Gesture.None),
+        ("says nothing in particular", Gesture.None),
     ];
 
     var gesturePass = 0;
     foreach (var (action, expect) in gestureCases)
     {
-        var got = RoseBody.Classify(action);
+        var got = GestureClassifier.Classify(action);
         var ok = got == expect;
         if (ok) gesturePass++;
         Console.WriteLine($"    [{(ok ? "PASS" : "FAIL")}] \"{action}\" -> {got}, expected {expect}");

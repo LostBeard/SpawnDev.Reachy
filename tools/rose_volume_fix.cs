@@ -1,4 +1,4 @@
-#:package SSH.NET@2024.*
+#:package SSH.NET@2026.*
 
 // Rose - ALSA volume fix over SSH.
 //

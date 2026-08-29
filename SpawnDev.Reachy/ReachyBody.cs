@@ -1,10 +1,10 @@
-namespace SpawnDev.Reachy.Rose;
+namespace SpawnDev.Reachy;
 
 /// <summary>
 /// Turns the stage directions the model writes into actual movement.
 /// </summary>
 /// <remarks>
-/// The personas tell each character it has a head, antennas and a rotating torso
+/// The personas tell each style it has a head, antennas and a rotating torso
 /// and to react physically before speaking, so the model emits things like
 /// "*antennas twitch excitedly*" and "*torso rotates to face Aubriella*" on its own.
 /// Those are already a description of an intended motion - this maps them onto the
@@ -15,7 +15,7 @@ namespace SpawnDev.Reachy.Rose;
 /// success and simply does not go there, so commanding a range that does not exist
 /// produces a gesture that looks half-finished rather than an error.
 /// </remarks>
-public sealed class RoseBody : IAsyncDisposable
+public sealed class ReachyBody : IAsyncDisposable
 {
     private readonly ReachyMiniClient _robot;
 
@@ -27,11 +27,14 @@ public sealed class RoseBody : IAsyncDisposable
     private readonly Random _rng = new();
     private Task? _idleLoop;
     private volatile bool _idleEnabled;
-    private Character? _idleCharacter;
+    private GestureStyle? _idleStyle;
 
+    /// <summary>Diagnostic log: which gesture a stage direction resolved to, and what was skipped.</summary>
     public event Action<string>? Log;
 
-    public RoseBody(ReachyMiniClient robot) => _robot = robot;
+    /// <summary>Drives <paramref name="robot"/>'s head, antennas and torso.</summary>
+    /// <param name="robot">The robot to move. Not disposed with this instance.</param>
+    public ReachyBody(ReachyMiniClient robot) => _robot = robot;
 
     // ---- measured envelope (--probe-limits, 2026-07-20) ----
     // Each value is held short of the real limit so a scaled-up gesture still has
@@ -73,9 +76,9 @@ public sealed class RoseBody : IAsyncDisposable
     /// backlog of gestures played after the sentence they belonged to looks worse
     /// than no gesture at all.
     /// </remarks>
-    public async Task PerformAsync(string action, Character character, CancellationToken ct = default)
+    public async Task PerformAsync(string action, GestureStyle style, CancellationToken ct = default)
     {
-        var gesture = Classify(action);
+        var gesture = GestureClassifier.Classify(action);
         if (gesture == Gesture.None) return;
 
         if (!await _moving.WaitAsync(0, ct)) { Log?.Invoke($"busy, skipped gesture {gesture}"); return; }
@@ -83,97 +86,15 @@ public sealed class RoseBody : IAsyncDisposable
         try
         {
             Log?.Invoke($"gesture {gesture} <- \"{action}\"");
-            await RunAsync(gesture, character, ct);
+            await RunAsync(gesture, style, ct);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { Log?.Invoke($"gesture failed: {ex.GetType().Name}: {ex.Message}"); }
         finally { _moving.Release(); }
     }
 
-    public enum Gesture
-    {
-        None, Nod, Shake, Tilt, Perk, Wiggle, Droop,
-        LookDown, LookUp, LeanIn, TurnBody, Bounce, Spin,
-    }
-
-    /// <summary>Marker for "the antennas are the subject", refined by the verb near them.</summary>
-    private const Gesture Antennas = (Gesture)(-1);
-
-    private static readonly (Gesture Gesture, string[] Words)[] Cues =
-    [
-        (Antennas,          ["antenna"]),
-        (Gesture.Nod,       ["nod", "agrees", "agreeing"]),
-        (Gesture.Shake,     ["shake", "shakes"]),
-        (Gesture.Tilt,      ["tilt", "curious", "confused", "puzzl", "quizzical", "think", "ponder", "considers"]),
-        (Gesture.Spin,      ["spin", "circle", "twirl", "whirl"]),
-        (Gesture.Bounce,    ["bounce", "bob", "jump", "hop", "excited", "giggl", "laugh", "chuckl", "wiggl"]),
-        (Gesture.Droop,     ["sad", "sigh", "droop", "dejected", "disappoint", "downcast", "slump"]),
-        (Gesture.LeanIn,    ["lean", "closer", "peer"]),
-        (Gesture.LookDown,  ["look down", "looks down", "glance down", "floor", "ground"]),
-        (Gesture.LookUp,    ["look up", "looks up", "gasp", "surprise", "shock"]),
-        (Gesture.TurnBody,  ["torso", "body", "rotate", "turn", "swivel", "face"]),
-    ];
-
-    /// <summary>
-    /// Checked only when nothing above matched.
-    /// </summary>
-    /// <remarks>
-    /// "head" is a bare noun rather than an action, so it must not compete on
-    /// position - it is almost always the first word of the sentence. Letting it
-    /// win turned "Head spins around to face Aubs" into a head tilt, because
-    /// "head" sits at index 0 and "spins" does not.
-    /// </remarks>
-    private static readonly (Gesture Gesture, string[] Words)[] Fallbacks =
-    [
-        (Gesture.Tilt, ["head"]),
-    ];
-
-    /// <summary>
-    /// Picks a gesture from the words in a stage direction.
-    /// </summary>
-    /// <remarks>
-    /// Whichever cue appears EARLIEST wins, because the model writes the primary
-    /// action first and qualifies it afterwards. Fixed-priority ordering got this
-    /// wrong in both directions on real output: "antennas twitch excitedly as the
-    /// torso rotates" is an antenna twitch that happens to be excited, while "I bob
-    /// my torso up and down enthusiastically, my antennas wiggling" is a bob that
-    /// happens to involve antennas. Position separates them; keyword priority
-    /// cannot.
-    /// </remarks>
-    public static Gesture Classify(string action)
-    {
-        if (string.IsNullOrWhiteSpace(action)) return Gesture.None;
-        var a = action.ToLowerInvariant();
-
-        var best = Gesture.None;
-        var bestAt = int.MaxValue;
-
-        foreach (var (gesture, words) in Cues)
-            foreach (var w in words)
-            {
-                var at = a.IndexOf(w, StringComparison.Ordinal);
-                if (at >= 0 && at < bestAt) { bestAt = at; best = gesture; }
-            }
-
-        bool Has(params string[] words) => words.Any(w => a.Contains(w, StringComparison.Ordinal));
-
-        if (best == Gesture.None)
-        {
-            foreach (var (gesture, words) in Fallbacks)
-                if (Has(words)) return gesture;
-            return Gesture.None;
-        }
-
-        if (best != Antennas) return best;
-
-        // The antennas are the subject - the verb decides what they do.
-        if (Has("droop", "lower", "fall", "sag", "sad", "flatten")) return Gesture.Droop;
-        if (Has("perk", "straight", "alert", "raise", "shoot up", "stand")) return Gesture.Perk;
-        return Gesture.Wiggle;
-    }
-
-    /// <summary>Where Rose sits between gestures: head up and attentive.</summary>
-    private async Task RestAsync(Character c, CancellationToken ct, double duration = 0.5) =>
+    /// <summary>Where the robot sits between gestures: head up and attentive.</summary>
+    private async Task RestAsync(GestureStyle c, CancellationToken ct, double duration = 0.5) =>
         await _robot.GotoAsync(
             bodyYaw: 0,
             headPose: new XyzRpyPose(Z: HeadLiftMax, Pitch: -0.05),
@@ -183,7 +104,7 @@ public sealed class RoseBody : IAsyncDisposable
             interpolation: Interpolation.EaseInOut,
             ct: ct);
 
-    private async Task RunAsync(Gesture g, Character c, CancellationToken ct)
+    private async Task RunAsync(Gesture g, GestureStyle c, CancellationToken ct)
     {
         // Bigger characters move bigger. V swaggers, Doll barely moves at all.
         var s = Math.Clamp(c.MotionScale, 0.3, 1.6);
@@ -324,7 +245,7 @@ public sealed class RoseBody : IAsyncDisposable
     }
 
     /// <summary>Returns to a neutral resting pose.</summary>
-    public async Task SettleAsync(Character c, CancellationToken ct = default)
+    public async Task SettleAsync(GestureStyle c, CancellationToken ct = default)
     {
         try { await RestAsync(c, ct, duration: 0.8); } catch { }
     }
@@ -347,18 +268,18 @@ public sealed class RoseBody : IAsyncDisposable
     /// owns the head, and while she is speaking gestures own everything - both
     /// write the head and body. The antennas are the one channel neither of those
     /// touches, so idle motion can use them without ever fighting either, and they
-    /// are also the most expressive, character-defining part of the robot. A goto
+    /// are also the most expressive, style-defining part of the robot. A goto
     /// that commands only the antennas leaves the head exactly where the tracker
     /// put it.
     /// </remarks>
-    public void StartIdle(Character character)
+    public void StartIdle(GestureStyle style)
     {
-        _idleCharacter = character;
+        _idleStyle = style;
         _idleLoop ??= Task.Run(() => IdleLoopAsync(_idleCts.Token));
     }
 
     /// <summary>Updates whose resting antenna posture idle motion drifts around.</summary>
-    public void SetIdleCharacter(Character character) => _idleCharacter = character;
+    public void SetIdleStyle(GestureStyle style) => _idleStyle = style;
 
     /// <summary>
     /// Stops idle motion and waits for any in-flight idle twitch to release the
@@ -381,14 +302,14 @@ public sealed class RoseBody : IAsyncDisposable
                 // Randomised gap so the motion never settles into a mechanical rhythm.
                 await Task.Delay(TimeSpan.FromMilliseconds(_rng.Next(2500, 6000)), ct);
 
-                if (!_idleEnabled || _idleCharacter is null) continue;
+                if (!_idleEnabled || _idleStyle is null) continue;
 
                 // Never fight a real gesture: if one holds the mover, skip this tick.
                 if (!await _moving.WaitAsync(0, ct)) continue;
                 try
                 {
                     // The flag may have flipped to a reply while we were waiting.
-                    if (_idleEnabled && _idleCharacter is { } c)
+                    if (_idleEnabled && _idleStyle is { } c)
                         await IdleTwitchAsync(c, ct);
                 }
                 catch (OperationCanceledException) { }
@@ -400,15 +321,15 @@ public sealed class RoseBody : IAsyncDisposable
     }
 
     /// <summary>
-    /// One small antenna movement around the character's resting posture, then a
+    /// One small antenna movement around the style's resting posture, then a
     /// return to rest so the next gesture starts from a known pose.
     /// </summary>
-    private async Task IdleTwitchAsync(Character c, CancellationToken ct)
+    private async Task IdleTwitchAsync(GestureStyle c, CancellationToken ct)
     {
         var s = Math.Clamp(c.MotionScale, 0.3, 1.6);
         var (rl, rr) = c.AntennaRest;
 
-        // Small offset, scaled by the character's animation level, so Doll barely
+        // Small offset, scaled by the style's animation level, so Doll barely
         // stirs and V fidgets. Sign is random so a twitch can go either way.
         double Off() => (_rng.NextDouble() * 0.18 + 0.06) * s * (_rng.Next(2) == 0 ? 1 : -1);
 
@@ -440,6 +361,7 @@ public sealed class RoseBody : IAsyncDisposable
             antennas: (Clamp(left, -AntennaMax, AntennaMax), Clamp(right, -AntennaMax, AntennaMax)),
             duration: duration, interpolation: Interpolation.EaseInOut, ct: ct);
 
+    /// <summary>Stops idle motion and waits for the idle loop to finish. Does not park the robot.</summary>
     public async ValueTask DisposeAsync()
     {
         _idleEnabled = false;

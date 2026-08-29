@@ -58,6 +58,7 @@ Run these instead of asking a child to find your bugs for you.
 | `--test-ears <file.wav>` | VAD + transcription on a file, no robot needed |
 | `--test-brain` | the language model alone, with latency per reply |
 | `--test-names` | what recognition ACTUALLY returns for each character name |
+| `--test-verify` | whether Rose listening to her own render catches a garbled one, and what the check costs |
 | `--test-speech` | sentence splitting, action stripping, switch-intent gating |
 | `--test-body` | every gesture, driven by real stage directions the model produced |
 | `--probe-limits` | measures the real joint travel by commanding past it and reading back |
@@ -103,6 +104,49 @@ consistently, across every voice tested. Measured rather than guessed, that took
 switching from 10/21 to 21/21. Since several of those are ordinary English words, they are
 only matched in the slot immediately after a switch cue, so "I want an ice cream" does not
 turn the robot into a different character. `--test-names` re-measures it.
+
+**The cloner garbles an occasional noise draw, and the fix is to let her hear herself.**
+Zero-shot ZipVoice draws fresh noise for every render, so the same sentence can come back
+as a different sentence - it is a property of the model, not of the words it was given, and
+no reference or phoneme tuning removes it. Every cloned line is now transcribed, scored
+against the words it was asked to say, and drawn again if they do not match. `--no-verify`
+turns it off for an A/B by ear and `--test-verify` re-measures all of it.
+
+**The recogniser doing the checking must be the WEAKER one, which is the opposite of the
+obvious design.** Sharing the microphone's small.en model looks free and is wrong. Given
+the same captured clip - a render that had collapsed into a repetition loop - small.en
+wrote back *"Hey, can we talk about something else, please?"* and scored it **0%**, while
+base.en wrote *"Can Can Can We Can We Can We Can We Can"* and scored it **75%**. small.en is
+good enough to reconstruct the sentence that was meant, so it repairs the exact defect the
+check is looking for. A model that can fix the failure cannot detect it. The self-check runs
+its own base.en, which is also 3x cheaper (345ms vs 1095ms per clip, about **+320ms per
+line**) and is a ~75MB CPU model that never touches VRAM.
+
+**Keep the bad renders.** A garble happens on a few percent of draws and cannot be summoned
+on demand, so every one is saved to `models/garbled/` with the text it should have been, and
+every later run replays all of them. Without that, "no garble happened" and "the check has
+gone blind" produce identical clean output - which is exactly how the small.en problem above
+hid behind a run reporting 0 garbles in 96 draws.
+
+**A word-error check on synthesised speech does NOT floor at zero, so the tolerance has to
+clear the floor.** Renders that sound perfect score 8-15% when the line carries a name the
+recogniser does not know, and 0% when it does not. The threshold sits at 20% for that
+reason. Two consequences worth knowing: a render rejected by the pitch guard is never
+transcribed at all, so reporting its word error as 0% would be an unmeasured zero wearing a
+perfect score; and a line whose floor is genuinely above tolerance would otherwise pay the
+full re-roll loop every time it was spoken, so a render that fails every draw is still
+remembered for the session - just never written to the durable cache, where a bad draw would
+be replayed forever.
+
+**Anything measuring a transcript needs a control sentence with no compound words.** The
+first control here ended "near the river bank", the recogniser wrote "riverbank", and a
+flawless render scored 15% - a floor under the instrument that had nothing to do with the
+audio. Changing the sentence took the same control to 0%.
+
+**sherpa-onnx resamples inside `AcceptWaveform`.** The synthesiser renders at 24kHz and the
+recogniser wants 16kHz; passing the clip's true rate is enough, and it logs
+`Creating a resampler: in_sample_rate: 24000 output_sample_rate: 16000` when it does. No
+resampling code is needed on this side - which is worth knowing before writing one.
 
 **`play_sound` only queues.** It returns as soon as playback is accepted, not when it
 finishes, so starting the next clip cuts the previous one off. A reply synthesised sentence

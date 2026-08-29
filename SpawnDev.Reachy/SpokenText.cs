@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace SpawnDev.Reachy.Rose;
+namespace SpawnDev.Reachy;
 
 /// <summary>
 /// Separates what Rose SAYS from what Rose DOES.

@@ -19,9 +19,19 @@ public class ReachyMiniClient : IDisposable
     /// <summary>Daemon base address, e.g. http://192.168.1.170:8000.</summary>
     public Uri BaseAddress => _http.BaseAddress!;
 
+    /// <summary>Connects to a robot by host name or address.</summary>
+    /// <param name="hostOrIp">The robot's host name or IP, e.g. "192.168.1.170".</param>
+    /// <param name="port">Daemon port. 8000 is the daemon's default.</param>
     public ReachyMiniClient(string hostOrIp, int port = 8000)
         : this(new HttpClient { BaseAddress = new Uri($"http://{hostOrIp}:{port}") }, ownsHttp: true) { }
 
+    /// <summary>Connects using a caller-supplied <see cref="HttpClient"/>.</summary>
+    /// <param name="http">Client whose <see cref="HttpClient.BaseAddress"/> points at the daemon.</param>
+    /// <param name="ownsHttp">
+    /// True to dispose <paramref name="http"/> along with this client. False (the default) when the
+    /// caller is pooling it, which is the usual reason to pass one in.
+    /// </param>
+    /// <exception cref="ArgumentException">The client has no BaseAddress.</exception>
     public ReachyMiniClient(HttpClient http, bool ownsHttp = false)
     {
         _http = http;
@@ -32,11 +42,13 @@ public class ReachyMiniClient : IDisposable
 
     // ---- daemon / status ----
 
+    /// <summary>Everything the daemon reports about itself and the robot.</summary>
     public Task<DaemonStatus?> GetStatusAsync(CancellationToken ct = default) =>
         _http.GetFromJsonAsync("/api/daemon/status", ReachyJson.Default.DaemonStatus, ct);
 
     // ---- motors ----
 
+    /// <summary>The motors' current mode.</summary>
     public Task<MotorStatus?> GetMotorStatusAsync(CancellationToken ct = default) =>
         _http.GetFromJsonAsync("/api/motors/status", ReachyJson.Default.MotorStatus, ct);
 
@@ -60,6 +72,13 @@ public class ReachyMiniClient : IDisposable
 
     // ---- state ----
 
+    /// <summary>
+    /// Current torso rotation, in radians.
+    /// </summary>
+    /// <remarks>
+    /// The body yaw is a real, first-class axis that the stock apps simply never register as a tool -
+    /// which is why the robot will tell you it cannot turn its body. It can.
+    /// </remarks>
     public Task<double> GetBodyYawAsync(CancellationToken ct = default) =>
         _http.GetFromJsonAsync("/api/state/present_body_yaw", ReachyJson.Default.Double, ct);
 
@@ -132,6 +151,8 @@ public class ReachyMiniClient : IDisposable
         return await resp.Content.ReadFromJsonAsync(ReachyJson.Default.MoveHandle, ct);
     }
 
+    /// <summary>Plays the daemon's built-in wake-up move.</summary>
+    /// <returns>A handle to the QUEUED move - it has not finished when this returns.</returns>
     public async Task<MoveHandle?> WakeUpAsync(CancellationToken ct = default)
     {
         using var r = await _http.PostAsync("/api/move/play/wake_up", null, ct);
@@ -139,6 +160,15 @@ public class ReachyMiniClient : IDisposable
         return await r.Content.ReadFromJsonAsync(ReachyJson.Default.MoveHandle, ct);
     }
 
+    /// <summary>
+    /// Lowers the robot into its shell, the daemon's own resting move.
+    /// </summary>
+    /// <remarks>
+    /// This is the ONLY pose motor power can be cut from cleanly. A neutral, head-up pose is not
+    /// mechanically stable, so disabling the motors there lets gravity drop the head. Wait for the
+    /// head to stop moving before cutting power - the returned handle only means the move is queued.
+    /// </remarks>
+    /// <returns>A handle to the QUEUED move.</returns>
     public async Task<MoveHandle?> GotoSleepAsync(CancellationToken ct = default)
     {
         using var r = await _http.PostAsync("/api/move/play/goto_sleep", null, ct);
@@ -146,6 +176,7 @@ public class ReachyMiniClient : IDisposable
         return await r.Content.ReadFromJsonAsync(ReachyJson.Default.MoveHandle, ct);
     }
 
+    /// <summary>Cancels whatever move is currently running.</summary>
     public async Task StopMoveAsync(CancellationToken ct = default)
     {
         using var r = await _http.PostAsync("/api/move/stop", null, ct);
@@ -168,17 +199,26 @@ public class ReachyMiniClient : IDisposable
         r.EnsureSuccessStatusCode();
     }
 
+    /// <summary>
+    /// The face the daemon's tracker currently has, or null if it is not reporting one.
+    /// </summary>
+    /// <remarks>
+    /// Gate on <see cref="FaceTarget.Detected"/>. This is the clean tracking signal; the head pose is
+    /// not, because it also moves for idle motion and the two cannot be told apart from the value.
+    /// </remarks>
     public async Task<FaceTarget?> GetFaceAsync(CancellationToken ct = default)
     {
         var r = await _http.GetFromJsonAsync("/api/media/tracking/face", ReachyJson.Default.FaceTargetResponse, ct);
         return r?.FaceTarget;
     }
 
+    /// <summary>Whether the media subsystem is free to play a sound.</summary>
     public Task<MediaStatus?> GetMediaStatusAsync(CancellationToken ct = default) =>
         _http.GetFromJsonAsync("/api/media/status", ReachyJson.Default.MediaStatus, ct);
 
     // ---- audio ----
 
+    /// <summary>Current speaker volume. Reads 100 out of the box - see <see cref="SetVolumeAsync"/>.</summary>
     public Task<VolumeInfo?> GetVolumeAsync(CancellationToken ct = default) =>
         _http.GetFromJsonAsync("/api/volume/current", ReachyJson.Default.VolumeInfo, ct);
 
@@ -198,9 +238,19 @@ public class ReachyMiniClient : IDisposable
         r.EnsureSuccessStatusCode();
     }
 
+    /// <summary>Sounds the robot is currently holding, grouped by the daemon's own categories.</summary>
+    /// <remarks>
+    /// Uploads persist across sessions, so a clip made in an earlier run is still here and still
+    /// playable - which is what lets a named, content-addressed clip be reused instead of re-rendered.
+    /// </remarks>
     public async Task<Dictionary<string, List<string>>?> ListSoundsAsync(CancellationToken ct = default) =>
         await _http.GetFromJsonAsync("/api/media/sounds", ReachyJson.Default.DictionaryStringListString, ct);
 
+    /// <summary>Uploads a sound to the robot under <paramref name="fileName"/>, overwriting any clip of that name.</summary>
+    /// <param name="fileName">Name to store it under, and the name <see cref="PlaySoundAsync"/> takes.</param>
+    /// <param name="content">The audio itself. WAV - the daemon sniffs the payload and rejects non-audio.</param>
+    /// <param name="ct">Cancels the upload.</param>
+    /// <exception cref="HttpRequestException">The daemon rejected it; the message carries what it said.</exception>
     public async Task UploadSoundAsync(string fileName, Stream content, CancellationToken ct = default)
     {
         using var form = new MultipartFormDataContent();
@@ -219,6 +269,16 @@ public class ReachyMiniClient : IDisposable
         }
     }
 
+    /// <summary>
+    /// Starts playing an uploaded sound. Returns as soon as playback is QUEUED, not when it ends.
+    /// </summary>
+    /// <remarks>
+    /// This is load-bearing: starting a second clip while one is still playing cuts the first one
+    /// off, which sounds like the robot interrupting itself a word or two into every sentence. A
+    /// caller playing several clips in a row has to wait out each one's duration itself.
+    /// </remarks>
+    /// <param name="fileName">Name the clip was uploaded under.</param>
+    /// <param name="ct">Cancels the request.</param>
     public async Task PlaySoundAsync(string fileName, CancellationToken ct = default)
     {
         using var r = await _http.PostAsJsonAsync("/api/media/play_sound",
@@ -226,6 +286,7 @@ public class ReachyMiniClient : IDisposable
         r.EnsureSuccessStatusCode();
     }
 
+    /// <summary>Stops whatever is playing.</summary>
     public async Task StopSoundAsync(CancellationToken ct = default)
     {
         using var r = await _http.PostAsync("/api/media/stop_sound", null, ct);
@@ -249,6 +310,7 @@ public class ReachyMiniClient : IDisposable
         return await r.Content.ReadFromJsonAsync(ReachyJson.Default.AudioParameter, ct);
     }
 
+    /// <summary>Disposes the underlying <see cref="HttpClient"/> if this client created it.</summary>
     public void Dispose()
     {
         if (_ownsHttp) _http.Dispose();

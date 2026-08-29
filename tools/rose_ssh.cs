@@ -1,4 +1,4 @@
-#:package SSH.NET@2024.*
+#:package SSH.NET@2026.*
 
 // Run a command on Rose over SSH. General purpose - the daemon's /logs endpoint
 // is a deprecated HTML page, so real diagnostics have to come from journalctl.

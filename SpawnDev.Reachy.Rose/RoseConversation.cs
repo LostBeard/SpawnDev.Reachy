@@ -22,7 +22,10 @@ public sealed class RoseConversation : IAsyncDisposable
     private readonly RoseBrain _brain;
     private readonly WebResearch _research;
     private readonly RoseVoice _voice;
-    private readonly RoseBody _body;
+    private readonly ReachyBody _body;
+
+    /// <summary>The recogniser Rose checks her OWN renders with, or null when unverified.</summary>
+    private readonly SpeechRecognizer? _verifier;
 
     /// <summary>Serialises replies so two utterances can never talk over each other.</summary>
     private readonly SemaphoreSlim _turn = new(1, 1);
@@ -80,13 +83,22 @@ public sealed class RoseConversation : IAsyncDisposable
     /// models/voiceprints. Characters without one keep their Kokoro voice, so this is
     /// safe to leave on while references are still being chosen.
     /// </param>
+    /// <param name="verifySpeech">
+    /// Listen to each cloned render before speaking it, and draw again when the words
+    /// that come back are not the words asked for. The cloner garbles an occasional
+    /// noise draw whatever text it is given, and Aubs hearing nonsense in N's voice
+    /// reads as Rose being broken. Costs one transcription per rendered line - measured at
+    /// about 350ms - on a small CPU recogniser of its own, deliberately not the sharper
+    /// one the microphone uses.
+    /// </param>
     public RoseConversation(
         string robotHost,
         string modelDir,
         string ollamaModel = "llama3.1:8b",
         bool useMicrophone = true,
         bool cloneVoices = false,
-        int cloneSteps = 4)
+        int cloneSteps = 4,
+        bool verifySpeech = true)
     {
         _robot = new ReachyMiniClient(robotHost);
         _link = new RoseAudioLink(robotHost);
@@ -96,8 +108,27 @@ public sealed class RoseConversation : IAsyncDisposable
         _research = new WebResearch();
         _brain = new RoseBrain(ollamaModel, research: _research);
         _voice = new RoseVoice(_robot, cloneVoices: cloneVoices, cloneSteps: cloneSteps);
-        _body = new RoseBody(_robot);
+        _body = new ReachyBody(_robot);
         _useMicrophone = useMicrophone;
+
+        // Rose checks her own renders through a SEPARATE, deliberately weaker recogniser.
+        //
+        // Sharing the microphone's model was the obvious design and it is wrong, measured:
+        // small.en is chosen to understand a ten year old, and a model that capable
+        // REPAIRS the defect the check is looking for. Given a render that had collapsed
+        // into "Can Can Can We Can We Can", small.en wrote back "Hey, can we talk about
+        // something else, please?" and scored it 0% - a perfect score for a clip that was
+        // gibberish. base.en transcribed the repetition as it actually sounded and scored
+        // it 75% wrong. The check has to hear what is there, not what was meant.
+        //
+        // It is also 3x cheaper (345ms vs 1095ms per clip), which is the whole cost of
+        // verification, and it is a ~75MB CPU model - it never touches the VRAM the
+        // language model and the cloner are competing for.
+        if (verifySpeech)
+        {
+            _verifier = new SpeechRecognizer(modelDir, whisperModel: "base.en", threads: 2);
+            _voice.SpeechVerifier = _verifier.Transcribe;
+        }
     }
 
     /// <summary>Supplies 16kHz mono audio as if it had come from the robot's microphone.</summary>
@@ -122,6 +153,7 @@ public sealed class RoseConversation : IAsyncDisposable
                 $"{problem}\nStart it with: ~/AppData/Local/Programs/Ollama/ollama.exe serve");
 
         _ears.Log += m => Log?.Invoke(m);
+        _voice.Log += m => Log?.Invoke(m);
         _link.Log += m => Log?.Invoke(m);
         _body.Log += m => Log?.Invoke(m);
         _research.Log += m => Log?.Invoke(m);
@@ -186,7 +218,7 @@ public sealed class RoseConversation : IAsyncDisposable
             {
                 _character = switched;
                 _brain.Forget();
-                _body.SetIdleCharacter(switched);
+                _body.SetIdleStyle(switched);
 
                 // Settle into the new character's resting antenna posture, which is
                 // a large part of reading who she is at a glance.
@@ -289,7 +321,7 @@ public sealed class RoseConversation : IAsyncDisposable
 
             _character = to;
             _brain.Forget();
-            _body.SetIdleCharacter(to);
+            _body.SetIdleStyle(to);
             _ = _body.SettleAsync(to, ct);
 
             var line = SwitchGreeting(to);
@@ -464,6 +496,7 @@ public sealed class RoseConversation : IAsyncDisposable
         await _ears.DisposeAsync();
         await _link.DisposeAsync();
         _voice.Dispose();
+        _verifier?.Dispose();
         _robot.Dispose();
         _cts.Dispose();
         _turn.Dispose();

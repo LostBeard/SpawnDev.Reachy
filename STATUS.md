@@ -43,6 +43,82 @@ Robot parked: centred, `goto_sleep`, motors **disabled**, tracking off, 0 loop e
 
 ---
 
+## She checks her own voice before speaking - 2026-08-29
+
+Zero-shot ZipVoice draws fresh noise for every render, so the same sentence occasionally
+comes back as a different sentence. It is a property of the model, not of the text, so no
+reference or phoneme tuning removes it - the only reliable detector is to LISTEN to the
+render. Rose now does: every cloned line is transcribed by the recogniser already loaded
+for her microphone, scored against the words she was asked to say, and drawn again if they
+do not match. `--no-verify` turns it off for an A/B by ear.
+
+**Measured in N's voice (`--test-verify`), on the production recogniser:**
+
+| | |
+|---|---|
+| single draws that came back wrong | **4 of 48** |
+| fixed by drawing again | **4 of 4** |
+| spoken wrong anyway | **0** |
+| cost of the check | **426ms per line** (1.02 transcriptions x 418ms) |
+| same check on small.en instead | 1005ms per line, **and it misses the bad ones** |
+
+**🔴 The sharper recogniser is BLIND to the failure. This is the finding of the day.**
+Sharing the microphone's small.en model was the obvious design, and it is wrong. Handed the
+same captured clip - a render that had collapsed into a repetition loop:
+
+| recogniser | transcribed it as | scored | verdict |
+|---|---|---|---|
+| small.en (the microphone's) | "Hey, can we talk about something else, please?" | **0%** | **MISSED - would have been spoken** |
+| base.en (the self-check) | "Can Can Can We Can We Can We Can We Can" | **75%** | flagged |
+
+small.en is chosen to understand a ten year old in a room, and a model that capable
+**repairs** the defect the check exists to find. It reconstructed the sentence that was
+meant and scored the gibberish perfect. A recogniser good enough to fix the failure cannot
+be used to detect it - the same shape as
+`feedback-a-grader-can-hide-the-failure-it-grades`.
+
+So the self-check has its own `SpeechRecognizer` on **base.en**, which is also **3x cheaper**
+(345ms vs 1095ms per clip, taking verification from +1005ms to about **+320ms per line**) and
+is a ~75MB CPU model that never touches the VRAM the language model and the cloner compete
+for. One class, two instances - not two mechanisms.
+
+**This was only visible because the positive controls existed.** The small.en runs reported
+"0 garbles in 96 draws", which reads as "the cloner is fine" and actually meant "the
+instrument cannot see it". Replaying clips already known to be bad is what separated those
+two.
+
+**There is NO established garble rate.** Across runs the count went 4/48, 1/72, 3/72,
+0/96 (that last on the blind recogniser) - the events cluster and the sample is far too
+small. `--test-verify` prints that warning itself rather than quoting a percentage as if it
+were solid. What IS established: real garbles happen, and re-rolling fixed every one seen.
+
+**Positive controls, because a clean run and a blind check look identical.** Every garbled
+render is saved to `models/garbled/` with the text it was meant to be, and every later run
+replays all of them. Captures fall into two measured groups - **STRONG at 62-75%** (real
+garbles) and **marginal at 23-27%** (tolerance false positives sitting just above the
+instrument's own noise, like "gonna" for "going to"). Nothing has landed between them, so
+only a missed STRONG control fails the run; failing on a marginal one would be a false gate.
+When the library holds no strong evidence yet, the harness says so out loud rather than
+passing quietly.
+
+Current state: **8 captured, 4 STRONG, all 4 flagged.** The clips live beside the models
+rather than in the repo - they are the show voice cloned, and this project does not
+distribute audio impersonating real actors.
+
+**Two things the numbers teach:**
+
+- A word-error check on synthesised speech does **not** floor at zero. Renders that sound
+  perfect score 8-15% when the line carries a name the recogniser does not know, 0% when it
+  does not, so the 20% threshold has to clear that floor.
+- A render the pitch guard rejected is never transcribed, so its word error is **unmeasured,
+  not zero**. It is reported as `n/a`; printing 0% there would dress a skipped check as a
+  perfect line.
+
+A verified render is cached exactly as before. One that failed every draw is spoken and kept
+for the session, but never written to the durable cache - a bad draw stored by content would
+be replayed in every future session, which is how a single too-deep render of the greeting
+once became "she always greets in the wrong voice".
+
 ## Projects
 
 - **`SpawnDev.Reachy`** - C# SDK for the daemon REST API + WebRTC signalling + audio

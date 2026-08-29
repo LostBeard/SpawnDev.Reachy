@@ -33,6 +33,12 @@ public record Character(
     public string[] Mishearings { get; init; } = Mishearings ?? [];
 
     /// <summary>
+    /// A Character IS a movement style, plus a voice and a persona the library has no opinion about.
+    /// Implicit so the shared <see cref="ReachyBody"/> choreography can be handed a character directly.
+    /// </summary>
+    public static implicit operator GestureStyle(Character c) => new(c.AntennaRest, c.MotionScale);
+
+    /// <summary>
     /// How fast this character talks, as a multiplier on the synthesiser's speed.
     /// 1.0 is the model's natural pace; below 1.0 is slower and more relaxed, above
     /// is quicker. A zero-shot clone inherits the tempo of its reference clip, so a

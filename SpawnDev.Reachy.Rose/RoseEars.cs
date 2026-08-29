@@ -25,7 +25,7 @@ public sealed class RoseEars : IAsyncDisposable
     private readonly record struct Work(short[] Pcm, bool Flush);
 
     private readonly VoiceActivityDetector _vad;
-    private readonly OfflineRecognizer _asr;
+    private readonly SpeechRecognizer _asr;
     private readonly Channel<Work> _incoming;
     private readonly CancellationTokenSource _cts = new();
     private readonly Task _worker;
@@ -108,40 +108,7 @@ public sealed class RoseEars : IAsyncDisposable
 
         _vad = new VoiceActivityDetector(vadConfig, bufferSizeInSeconds: 30.0f);
 
-        // onnxruntime loads cuDNN by bare name from the exe dir + PATH, not the
-        // runtimes/native subfolder where the CUDA build lives, so make it findable
-        // before creating the recognizer (same as the voice cloner does).
-        if (provider == "cuda") RoseVoiceClone.EnsureCudaLibrariesFindable();
-
-        // Use the int8 weights on BOTH providers. The fp32 Whisper decoder crashes the
-        // onnxruntime 1.27 CUDA EP (native SEHException on load - fp32+CPU and int8+CUDA
-        // both work, only fp32+CUDA faults), so int8 is the working GPU path here, and it
-        // still runs on the card ~1.7x faster than on CPU (measured: 2.7s vs 4.7s on a
-        // 16s clip) at small.en accuracy. `quantization:"fp32"` forces the full-precision
-        // weights for when a future onnxruntime fixes the CUDA fault. Both ship in the package.
-        var useInt8 = quantization switch
-        {
-            "int8" => true,
-            "fp32" => false,
-            _ => true,
-        };
-        var quant = useInt8 ? ".int8" : "";
-
-        var asrConfig = new OfflineRecognizerConfig();
-        asrConfig.ModelConfig.Whisper.Encoder = Path.Combine(whisperDir, $"{whisperName}-encoder{quant}.onnx");
-        asrConfig.ModelConfig.Whisper.Decoder = Path.Combine(whisperDir, $"{whisperName}-decoder{quant}.onnx");
-        asrConfig.ModelConfig.Tokens = Path.Combine(whisperDir, $"{whisperName}-tokens.txt");
-        asrConfig.ModelConfig.ModelType = "whisper";
-        // On GPU the flow runs on the card, so a couple of threads is plenty; on CPU use
-        // the caller's thread budget.
-        asrConfig.ModelConfig.NumThreads = provider == "cuda" ? 2 : threads;
-        asrConfig.ModelConfig.Provider = provider;
-        // 1 = sherpa prints its "available providers" line so we can SEE whether CUDA
-        // actually engaged rather than assuming it did.
-        asrConfig.ModelConfig.Debug = provider == "cuda" ? 1 : 0;
-        asrConfig.DecodingMethod = "greedy_search";
-
-        _asr = new OfflineRecognizer(asrConfig);
+        _asr = new SpeechRecognizer(modelDir, whisperModel, threads, provider, quantization);
 
         // Dropping the oldest frame under pressure is correct here: stale microphone
         // audio has no value, and unbounded growth would turn a slow transcription
@@ -239,15 +206,34 @@ public sealed class RoseEars : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Transcribes one clip directly, without going through the microphone path.
+    /// </summary>
+    /// <remarks>
+    /// The microphone's OWN recogniser, exposed for callers that already have audio in
+    /// hand rather than a live stream - reading a wav, or scoring a captured clip.
+    ///
+    /// This is NOT the right instrument for checking Rose's own renders, even though it
+    /// looks like it: this model is chosen to understand a ten year old, and a model that
+    /// good repairs the very defect a render check is looking for. Handed a render that
+    /// had collapsed into "Can Can Can We Can We Can", small.en wrote back the sentence
+    /// that was meant and scored it perfect. Self-checking gets its own recogniser, see
+    /// <see cref="SpeechRecognizer"/>.
+    /// </remarks>
+    /// <param name="samples">Mono float samples in [-1, 1].</param>
+    /// <param name="sampleRate">Sample rate of <paramref name="samples"/>.</param>
+    /// <returns>What was heard, or an empty string once the ears have been disposed.</returns>
+    public string TranscribeClip(float[] samples, int sampleRate) => _asr.Transcribe(samples, sampleRate);
+
+    /// <summary>The Whisper model the microphone is listening through.</summary>
+    public string Model => _asr.Model;
+
     private void Transcribe(float[] samples)
     {
         var seconds = samples.Length / (double)RoseAudioLink.OutputSampleRate;
         var sw = System.Diagnostics.Stopwatch.StartNew();
 
-        using var stream = _asr.CreateStream();
-        stream.AcceptWaveform(RoseAudioLink.OutputSampleRate, samples);
-        _asr.Decode(stream);
-        var text = stream.Result.Text?.Trim() ?? "";
+        var text = _asr.Transcribe(samples, RoseAudioLink.OutputSampleRate);
 
         Log?.Invoke($"heard {seconds:F1}s -> \"{text}\" ({sw.ElapsedMilliseconds}ms)");
 
