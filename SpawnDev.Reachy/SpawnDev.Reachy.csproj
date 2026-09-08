@@ -36,7 +36,7 @@
 		<!-- RoseAudioLink rides SpawnDev.RTC's cross-platform IRTCPeerConnection (browser + desktop),
 		     which bundles the SipSorcery fork and the PCM audio bridge. Concentus + the direct
 		     SpawnDev.SIPSorcery reference are no longer needed here. -->
-		<PackageReference Include="SpawnDev.RTC" Version="2.2.2" />
+		<PackageReference Include="SpawnDev.RTC" Version="2.2.3" />
 	</ItemGroup>
 
 </Project>
