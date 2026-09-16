@@ -17,7 +17,7 @@ namespace SpawnDev.Reachy;
 /// </remarks>
 public sealed class ReachyBody : IAsyncDisposable
 {
-    private readonly ReachyMiniClient _robot;
+    private readonly IReachyMotion _robot;
 
     /// <summary>One gesture at a time. Overlapping gotos fight each other and jitter.</summary>
     private readonly SemaphoreSlim _moving = new(1, 1);
@@ -34,7 +34,7 @@ public sealed class ReachyBody : IAsyncDisposable
 
     /// <summary>Drives <paramref name="robot"/>'s head, antennas and torso.</summary>
     /// <param name="robot">The robot to move. Not disposed with this instance.</param>
-    public ReachyBody(ReachyMiniClient robot) => _robot = robot;
+    public ReachyBody(IReachyMotion robot) => _robot = robot;
 
     // ---- measured envelope (--probe-limits, 2026-07-20) ----
     // Each value is held short of the real limit so a scaled-up gesture still has

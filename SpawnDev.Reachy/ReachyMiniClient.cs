@@ -11,7 +11,7 @@ namespace SpawnDev.Reachy;
 /// schema and no authentication on the LAN, so no Python SDK is required to drive
 /// the robot. Verified against a Reachy Mini Wireless running daemon v1.9.0.
 /// </remarks>
-public class ReachyMiniClient : IDisposable
+public class ReachyMiniClient : IDisposable, IReachyMotion, IReachyLifecycle
 {
     private readonly HttpClient _http;
     private readonly bool _ownsHttp;
