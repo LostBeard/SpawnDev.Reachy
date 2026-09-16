@@ -161,6 +161,16 @@ public class ReachyMiniJs : SpawnJSObject
         set { }
     }
 
+    /// <summary>
+    /// An off-screen, muted audio element for the robot's stream to render into.
+    /// </summary>
+    /// <remarks>
+    /// Lives here rather than on <c>ReachyEars</c> because creating a JS object needs the SpawnJS runtime,
+    /// and a <c>SpawnJSObject</c> subclass is what has it - <c>ReachyEars</c> is a plain class holding a
+    /// client, not a wrapper. See <c>ReachyEars.AttachSink</c> for why the element has to exist at all.
+    /// </remarks>
+    internal static HTMLAudioElement CreateAudioSink() => new HTMLAudioElement(JS.New("Audio"));
+
     /// <summary>Mute or unmute the robot's audio as the page hears it.</summary>
     public bool SetAudioMuted(bool muted) => JSRef!.Call<bool, bool>("setAudioMuted", muted);
 

@@ -4,7 +4,7 @@
 		<TargetFrameworks>net10.0</TargetFrameworks>
 		<Nullable>enable</Nullable>
 		<ImplicitUsings>enable</ImplicitUsings>
-		<Version>0.1.0-preview.2</Version>
+		<Version>0.1.0-preview.3</Version>
 		<GeneratePackageOnBuild>True</GeneratePackageOnBuild>
 		<GenerateDocumentationFile>true</GenerateDocumentationFile>
 		<EmbedAllSources>true</EmbedAllSources>
@@ -12,7 +12,7 @@
 		<Title>SpawnDev.Reachy.Browser</Title>
 		<Authors>LostBeard</Authors>
 		<Description>Drive a Reachy Mini from a browser over WebRTC, signalled through Hugging Face. A SpawnJS wrapper over @pollen-robotics/reachy-mini-sdk that implements SpawnDev.Reachy's IReachyMotion and IReachyLifecycle, so ReachyBody's gesture library, measured motion envelope and idle life run unchanged against a remote robot. This is the only route from a page served over HTTPS: the robot's daemon speaks plain HTTP on the LAN, which a secure page may not touch.</Description>
-		<PackageReleaseNotes>0.1.0-preview.2 - the robot's own audio, both directions, verified on hardware. ReachySpeaker plays synthesised speech out of the robot's speaker, converting to the 16 kHz mono 16-bit WAV the daemon requires (it does not transcode, and the symptom of getting it wrong is silence or wrong-speed audio rather than an error); playback is daemon-side on the daemon's clock, so speech and motion do not drift apart over a wireless link. PlayTestToneAsync proves that path with no model in the way - reaching it through a real reply costs a language model and a cold voice load, and a failure anywhere in that chain looks identical to broken audio. ReachyEars exposes the robot's four-microphone array as a MediaStream for speech recognition; note that the SDK's own micStream is the OUTBOUND direction and defaults to a silent placeholder, and that the robot's media event fires once during the connect handshake - so the subscription must exist before connecting. VerifyHeadMatrixConventionAsync now homes first and samples a window, instead of taking one reading mid-travel and reporting a different layout each run.</PackageReleaseNotes>
+		<PackageReleaseNotes>0.1.0-preview.3 - FIXES ReachyEars, which in preview.2 delivered no audio at all. The robot's remote audio track reports live and unmuted (the browser only unmutes once RTP is arriving), and a MediaStreamTrackProcessor built on it still sat on a read that never completed and never threw: Chrome does not run the decode pipeline for a remote audio track that nothing renders. ReachyEars now attaches its own muted, off-screen audio element as that sink - muted so the robot's microphone is not played into the room it is listening to, and so it stays inside the autoplay policy on a page with no user gesture. VERIFIED on hardware: 480-sample frames at 48 kHz, 803 chunks with live room levels. Also reports the track's readyState, muted and enabled the moment media arrives, and logs mute/unmute/ended transitions - a present-but-silent track is otherwise indistinguishable from a broken capture.</PackageReleaseNotes>
 		<PackageProjectUrl>https://github.com/LostBeard/SpawnDev.Reachy</PackageProjectUrl>
 		<PackageReadmeFile>README.md</PackageReadmeFile>
 		<PackageLicenseFile>LICENSE.txt</PackageLicenseFile>

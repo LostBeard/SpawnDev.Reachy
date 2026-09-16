@@ -70,7 +70,29 @@ public sealed class ReachyEars : IDisposable
             var audio = stream.GetAudioTracks();
             HasAudio = audio is { Length: > 0 };
             Stream = stream;
-            Log?.Invoke($"[reachy-ears] robot media arrived: {audio?.Length ?? 0} audio track(s)");
+
+            // A COUNT IS NOT A WORKING MICROPHONE. A remote track can be present and carrying nothing:
+            // `muted` is set BY THE BROWSER when no media is flowing from the peer, and `readyState`
+            // tells "live" apart from "ended". Neither raises an error, and a capture built on such a
+            // track simply never yields a frame - which reads as a broken capture pipeline rather than
+            // as a track with no data in it. Print all three the moment the media arrives.
+            var first = audio is { Length: > 0 } ? audio[0] : null;
+            var trackInfo = first == null ? ""
+                : $" [state={first.ReadyState} muted={first.Muted} enabled={first.Enabled} "
+                + $"label='{first.Label}']";
+            Log?.Invoke($"[reachy-ears] robot media arrived: {audio?.Length ?? 0} audio track(s){trackInfo}");
+
+            if (HasAudio) AttachSink(stream);
+
+            // `muted` on a remote track is not a user setting and cannot be cleared from this side - it
+            // flips on its own when packets start arriving. Report the transition rather than sampling
+            // once, because whether it ever unmutes is the whole question.
+            if (first != null)
+            {
+                first.OnUnMute += () => Log?.Invoke("[reachy-ears] audio track UNMUTED - packets are flowing");
+                first.OnMute += () => Log?.Invoke("[reachy-ears] audio track MUTED - packets stopped");
+                first.OnEnded += () => Log?.Invoke("[reachy-ears] audio track ENDED");
+            }
             if (HasAudio) StreamArrived?.Invoke(stream);
             else Log?.Invoke("[reachy-ears] no audio track - this robot is not carrying microphone audio");
         }
@@ -81,6 +103,48 @@ public sealed class ReachyEars : IDisposable
         }
     }
 
+    /// <summary>
+    /// Give the remote audio track a renderer, or Chrome never decodes it.
+    /// </summary>
+    /// <remarks>
+    /// 🔴 THE TRACK BEING LIVE IS NOT ENOUGH. MEASURED 2026-09-16: the robot's track reported
+    /// <c>state=live</c> and then <c>unmuted</c> - which the browser only does once RTP is arriving - and a
+    /// <c>MediaStreamTrackProcessor</c> built on it still sat on a read that never completed and never
+    /// threw. Chrome does not run the decode pipeline for a remote audio track that nothing renders, so a
+    /// processor alone is a consumer of something that is never produced. The symptom is the worst kind:
+    /// no frames, no error, no end-of-stream - a capture that has "started" and delivers silence forever.
+    ///
+    /// The SDK's own <c>attachVideo</c> is what normally supplies this sink; an app that only wants the
+    /// AUDIO has no reason to call it and no way to know it must. Hence an element of our own, owned and
+    /// disposed here.
+    ///
+    /// ⚠️ MUTED, and off-screen. The element exists to make the browser decode, not to play the robot out
+    /// of the computer's speakers - doing that would put the robot's microphone into the room it is
+    /// listening to. Muted also keeps it inside the autoplay policy, so it works on a page that has had no
+    /// user gesture yet; an unmuted element would have <c>play()</c> rejected there.
+    /// </remarks>
+    private void AttachSink(MediaStream stream)
+    {
+        try
+        {
+            var el = ReachyMiniJs.CreateAudioSink();
+            el.Muted = true;
+            el.SrcObject = stream;
+            // play() explicitly rather than an autoplay attribute: the element is never in the document,
+            // so nothing would trigger autoplay for it. Muted keeps this inside the autoplay policy.
+            _ = el.Play();
+            _sink = el;
+            Log?.Invoke("[reachy-ears] attached a muted sink so the browser decodes the robot's audio");
+        }
+        catch (Exception ex)
+        {
+            Log?.Invoke($"[reachy-ears] could not attach an audio sink, capture will stay silent: "
+                      + $"{ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    private HTMLAudioElement? _sink;
+
     /// <summary>Stop listening. Required before the client is disposed.</summary>
     public void Dispose()
     {
@@ -88,6 +152,10 @@ public sealed class ReachyEars : IDisposable
         _disposed = true;
         // Every += needs its -=, or the JS callback outlives this object and calls into a disposed one.
         try { _js.OnVideoTrack -= _handler; } catch { /* the client may already be gone */ }
+        // The sink holds the stream; leaving it would keep the browser decoding a robot nobody is
+        // listening to for as long as the page is open.
+        try { if (_sink is { } sink) { sink.SrcObject = null; sink.Dispose(); } } catch { }
+        _sink = null;
         Stream = null;
     }
 }

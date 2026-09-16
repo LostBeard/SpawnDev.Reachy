@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.1.0-preview.3 (`SpawnDev.Reachy.Browser`)
+
+**`ReachyEars` delivered no audio in preview.2.** Everything reported healthy: the robot's track arrived
+`state=live`, then fired `unmuted` - which a browser only does once RTP is actually arriving - and a
+`MediaStreamTrackProcessor` built on it sat on a read that never completed, never threw and never ended.
+
+🔴 **Chrome does not run the decode pipeline for a remote audio track that nothing renders.** A processor
+alone is a consumer of something that is never produced. The SDK's `attachVideo` normally supplies that
+sink; an app that wants only the AUDIO has no reason to call it and no way to know it must.
+
+`ReachyEars` now attaches its own audio element - **muted**, so the robot's microphone is not played into
+the room it is listening to, and so it stays inside the autoplay policy on a page that has had no user
+gesture. It also prints the track's `readyState`, `muted` and `enabled` on arrival and logs
+mute/unmute/ended, because a present-but-silent track is otherwise indistinguishable from a broken
+capture.
+
+**VERIFIED on hardware 2026-09-16**, robot -> browser over WebRTC from the Space:
+
+```
+[reachy-ears] robot media arrived: 1 audio track(s) [state=live muted=True enabled=True label='remote audio']
+[reachy-ears] attached a muted sink so the browser decodes the robot's audio
+[capture] first audio frame: 480 samples @48000 Hz
+[HF-MIC] chunks=803 in=480@48000Hz raw peak=0.0089 ...
+```
+
+
 ## 0.1.0-preview.2
 
 **The choreography is now transport-independent.**
