@@ -1,0 +1,45 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<TargetFrameworks>net10.0</TargetFrameworks>
+		<Nullable>enable</Nullable>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Version>0.1.0-preview.1</Version>
+		<GeneratePackageOnBuild>True</GeneratePackageOnBuild>
+		<GenerateDocumentationFile>true</GenerateDocumentationFile>
+		<EmbedAllSources>true</EmbedAllSources>
+		<DebugType>Embedded</DebugType>
+		<Title>SpawnDev.Reachy.Browser</Title>
+		<Authors>LostBeard</Authors>
+		<Description>Drive a Reachy Mini from a browser over WebRTC, signalled through Hugging Face. A SpawnJS wrapper over @pollen-robotics/reachy-mini-sdk that implements SpawnDev.Reachy's IReachyMotion and IReachyLifecycle, so ReachyBody's gesture library, measured motion envelope and idle life run unchanged against a remote robot. This is the only route from a page served over HTTPS: the robot's daemon speaks plain HTTP on the LAN, which a secure page may not touch.</Description>
+		<PackageReleaseNotes>0.1.0-preview.1 - first release. ReachyMiniJs (typed SpawnJS wrapper over the browser SDK, pinned to @pollen-robotics/reachy-mini-sdk 1.8.0, loaded via JS.Import so no JavaScript ships here) and ReachyWebRtcTransport (IReachyMotion + IReachyLifecycle over it, plus robot-speaker audio out). Verified end to end on a real wireless Reachy Mini, daemon v1.10.0: Hugging Face sign-in, signalling, robot pick, WebRTC session, wake, and commanded head motion arriving on the robot. Wireless robots only - the central signalling server does not serve the Lite.</PackageReleaseNotes>
+		<PackageProjectUrl>https://github.com/LostBeard/SpawnDev.Reachy</PackageProjectUrl>
+		<PackageReadmeFile>README.md</PackageReadmeFile>
+		<PackageLicenseFile>LICENSE.txt</PackageLicenseFile>
+		<PackageIcon>icon-128.png</PackageIcon>
+		<RepositoryUrl>https://github.com/LostBeard/SpawnDev.Reachy.git</RepositoryUrl>
+		<RepositoryType>git</RepositoryType>
+		<PackageTags>Reachy;ReachyMini;Robotics;Robot;SDK;Pollen;Browser;WebRTC;SpawnJS;Blazor;WebAssembly</PackageTags>
+		<NoPackageAnalysis>true</NoPackageAnalysis>
+		<IsPackable>true</IsPackable>
+		<LangVersion>latest</LangVersion>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<None Include="..\icon-128.png" Pack="true" PackagePath="\" />
+		<None Include="..\LICENSE.txt" Pack="true" PackagePath="\" />
+		<None Include="..\README.md" Pack="true" PackagePath="\" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<SupportedPlatform Include="browser" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<!-- ProjectReference, not PackageReference: the two move together and this repo builds them both.
+		     Consumers get SpawnDev.Reachy transitively at the version packed alongside. -->
+		<ProjectReference Include="..\SpawnDev.Reachy\SpawnDev.Reachy.csproj" />
+		<PackageReference Include="SpawnDev.SpawnJS" Version="2.1.17" />
+	</ItemGroup>
+
+</Project>
