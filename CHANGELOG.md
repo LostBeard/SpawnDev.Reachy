@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.1.0-preview.2
+
+**The choreography is now transport-independent.**
+
+`ReachyBody` - the measured motion envelope, the gesture classifier and the idle life - was bound to
+`ReachyMiniClient`, which speaks plain HTTP to the daemon on the LAN. A page served over HTTPS cannot
+reach that at all (the browser blocks it as mixed content), so a hosted app had no route to a robot, and
+the obvious workaround - reimplementing the choreography against a second transport - gives two gesture
+classifiers that eventually disagree about what a character just did.
+
+The surface turned out to be **one method**: `ReachyBody` calls `GotoAsync` and nothing else.
+
+- `IReachyMotion` - what a choreographer needs (`GotoAsync`).
+- `IReachyLifecycle` - what a connection owner needs (`SetMotorModeAsync`, `WakeUpAsync`, `GoHomeAsync`,
+  `GotoSleepAsync`), including the confirmed parking order.
+
+`ReachyMiniClient` satisfies both **by declaration alone** - the interface signatures match its existing
+members exactly, so there is no shim and no chance of the two drifting. Existing callers are unaffected;
+`ReachyBody`'s constructor now takes `IReachyMotion`, which `ReachyMiniClient` is.
+
+Hardware-checked against a real Reachy Mini (daemon v1.10.0, wireless) after the change: the SDK read
+path still works end to end.
+
+
 ## 0.1.0-preview.1
 
 First preview on nuget.org. **No functional change from `0.1.0-local.9`** - the same code, published so
