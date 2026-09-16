@@ -23,6 +23,47 @@ members exactly, so there is no shim and no chance of the two drifting. Existing
 Hardware-checked against a real Reachy Mini (daemon v1.10.0, wireless) after the change: the SDK read
 path still works end to end.
 
+### `SpawnDev.Reachy.Browser` - the robot's own audio, both directions
+
+Same version. This is the package that makes a **hosted** page work at all: the daemon speaks plain HTTP
+on the LAN, so an HTTPS page is blocked from it as mixed content, and WebRTC signalled through Hugging
+Face is the only route. It wraps `@pollen-robotics/reachy-mini-sdk@1.8.0` and implements `IReachyMotion`
+and `IReachyLifecycle`, so `ReachyBody`'s gestures run unchanged against a remote robot.
+
+- **`ReachySpeaker`** - synthesised speech out of the robot's own speaker, so a character with a body
+  sounds like it is in the room. Converts to the 16 kHz mono 16-bit WAV the daemon requires; playback is
+  daemon-side on the daemon's clock, which keeps speech and motion from drifting apart over a wireless
+  link. 🔴 The daemon does **not** validate and does **not** transcode - a wrong rate, depth or channel
+  count returns success and plays silence or the wrong pitch.
+- **`PlayTestToneAsync`** and the demo's "🔊 Test speaker" button, because of that. Reaching this path
+  through a real reply costs a language model and a cold voice load, and a failure anywhere in that chain
+  looks identical to broken audio. The tone is generated at 24 kHz on purpose so the `OfflineAudioContext`
+  resampler runs rather than being skipped - a resampling bug then comes out as the wrong pitch, which is
+  instantly recognisable, where silence is not.
+- **`ReachyEars`** - the four-microphone array as a `MediaStream`, for speech recognition. ⚠️ Two traps:
+  the SDK's own `micStream` is the **outbound** direction (browser microphone sent *to* the robot) and
+  defaults to a gain-zero oscillator placeholder, so reaching for it yields a stream that is silent by
+  construction and never errors; and the robot's media event fires **once**, during the connect
+  handshake, with no accessor afterwards - a listener attached after `autoConnect` resolves hears nothing
+  at all on a robot that is working perfectly.
+- **`VerifyHeadMatrixConventionAsync`** homes first and samples a window, keeping the reading closest to
+  the commanded value. It used to take one reading 1.6 s after commanding the lift, which caught the head
+  mid-travel: the same correct robot answered `ROW-MAJOR` on one run and `NEITHER slot matched` on the
+  next, and largest-magnitude latched `-0.0203` for a commanded `+0.0200` - right size, wrong sign.
+- **`ReachyWebRtcTransport.Log`** reports every command with the gap since the last, flagging one that
+  lands inside the previous move's duration. `ReachyBody` serialises its own gestures for exactly that
+  reason, but wake, go-home and the self-test probe bypass that mutex.
+
+**VERIFIED on hardware 2026-09-16**, from `https://lostbeard-spawndev-ai.static.hf.space/` over WebRTC:
+
+```
+[reachy-ears] robot media arrived: 1 audio track(s)
+commanded Z=0.0200 | [11]=0.0191 [14]=0.0000 -> ROW-MAJOR
+[HF-SPEAK] first audio after 18.5s (synth 10,204 ms)
+[reachy-speak] uploading 80,044 B, 2.50s (from 60,000 samples @24000 Hz)
+[reachy-speak] play start 2.50s -> play end 2.50s elapsed
+```
+
 
 ## 0.1.0-preview.1
 
