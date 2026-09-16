@@ -55,18 +55,46 @@ public sealed class ReachyWebRtcTransport : IReachyMotion, IReachyLifecycle, IAs
     /// <returns>The measured Z under each layout, and which one matched.</returns>
     public async Task<string> VerifyHeadMatrixConventionAsync(double probeZ = 0.02, CancellationToken ct = default)
     {
-        await GotoAsync(headPose: new XyzRpyPose(Z: probeZ), duration: 0.6, ct: ct).ConfigureAwait(false);
+        // 🔴 START FROM HOME. `goto_sleep` and the wake-up motion both leave the head LOW, and a probe
+        // launched from there is measured while the head is still climbing out of that pose - which is
+        // indistinguishable from a wrong layout. Homing first makes the starting point the same every run.
+        await GoHomeAsync(0.8, ct).ConfigureAwait(false);
         await Task.Delay(900, ct).ConfigureAwait(false);
-        _js.RequestState();
-        await Task.Delay(700, ct).ConfigureAwait(false);
 
-        var m = _js.HeadMatrix;
-        if (m is not { Length: 16 })
+        await GotoAsync(headPose: new XyzRpyPose(Z: probeZ), duration: 0.6, ct: ct).ConfigureAwait(false);
+
+        // 🔴 SAMPLE OVER A WINDOW, NOT ONCE. A single read at a fixed delay reports wherever the head
+        // happened to be at that instant, so the same correct robot answers ROW-MAJOR on one run and
+        // "NEITHER slot matched" on the next - a flapping verdict on a question whose answer cannot
+        // change. MEASURED 2026-09-16: one sample at 1.6 s read [11]=-0.0063 (still travelling) where the
+        // settled value is 0.0191.
+        //
+        // The question is "did the translation EVER reach the commanded Z in this slot", so keep the
+        // largest magnitude seen in each candidate. The wrong slot holds 0.0000 throughout, so there is
+        // nothing for it to latch onto; only the real one moves.
+        double rowMajorZ = 0, colMajorZ = 0;
+        var sawMatrix = false;
+        var deadline = DateTime.UtcNow.AddMilliseconds(3500);
+        while (DateTime.UtcNow < deadline)
+        {
+            _js.RequestState();
+            await Task.Delay(200, ct).ConfigureAwait(false);
+
+            var sample = _js.HeadMatrix;
+            if (sample is not { Length: 16 }) continue;
+            sawMatrix = true;
+            if (Math.Abs(sample[11]) > Math.Abs(rowMajorZ)) rowMajorZ = sample[11];
+            if (Math.Abs(sample[14]) > Math.Abs(colMajorZ)) colMajorZ = sample[14];
+
+            // Decided: one of them reached the commanded lift, so there is nothing left to wait for.
+            if (Math.Abs(rowMajorZ - probeZ) < probeZ * 0.5 || Math.Abs(colMajorZ - probeZ) < probeZ * 0.5)
+                break;
+        }
+
+        if (!sawMatrix)
             return "INCONCLUSIVE: the daemon has not reported a head matrix yet.";
 
         // Read the translation out of BOTH candidate layouts; only one can be near probeZ.
-        var rowMajorZ = m[11];
-        var colMajorZ = m[14];
         var rowHit = Math.Abs(rowMajorZ - probeZ) < probeZ * 0.5;
         var colHit = Math.Abs(colMajorZ - probeZ) < probeZ * 0.5;
 
@@ -103,9 +131,30 @@ public sealed class ReachyWebRtcTransport : IReachyMotion, IReachyLifecycle, IAs
             BodyYaw = bodyYaw,
         };
 
+        // ⚠️ THE TIMELINE IS THE ONLY WAY TO SEE A COLLISION. `ReachyBody` serialises ITS OWN gestures
+        // behind a mutex precisely because "overlapping gotos fight each other and jitter" - but the
+        // lifecycle calls (wake, go home, the self-test probe) do not go through ReachyBody at all, so
+        // nothing stops one of those landing on top of a trajectory that is still running. Jerky motion
+        // is what that looks like from across the room, and it is indistinguishable by eye from a tuning
+        // problem. Logging every command with the gap since the last one turns it into a readable fact:
+        // a gap SHORTER than the previous command's duration is an overlap.
+        var now = DateTime.UtcNow;
+        var gapMs = _lastCommandUtc is { } prev ? (now - prev).TotalMilliseconds : double.NaN;
+        var overlap = !double.IsNaN(gapMs) && gapMs < _lastDurationSec * 1000.0;
+        Log?.Invoke($"goto d={duration:F2}s gap={(double.IsNaN(gapMs) ? "-" : $"{gapMs:F0}ms")}"
+                  + (overlap ? $" OVERLAPS the previous {_lastDurationSec:F2}s move" : ""));
+        _lastCommandUtc = now;
+        _lastDurationSec = duration;
+
         var ok = _js.GotoTarget(target);
         return Task.FromResult<MoveHandle?>(ok ? null : null);
     }
+
+    /// <summary>Diagnostic log: every command sent to the robot, and whether it lands on a moving one.</summary>
+    public event Action<string>? Log;
+
+    private DateTime? _lastCommandUtc;
+    private double _lastDurationSec;
 
     /// <summary>
     /// Build the flat 4x4 the daemon expects from an XYZ+RPY pose. Rotation is ZYX
@@ -148,7 +197,15 @@ public sealed class ReachyWebRtcTransport : IReachyMotion, IReachyLifecycle, IAs
     /// <inheritdoc/>
     public async Task<MoveHandle?> WakeUpAsync(CancellationToken ct = default)
     {
+        Log?.Invoke("wakeUp start");
+        var started = DateTime.UtcNow;
         await _js.WakeUpAsync().ConfigureAwait(false);
+        // The wake trajectory is played BY THE DAEMON. Whether this await covers it or returns the moment
+        // the request is accepted decides whether the next command collides with it, so the duration is
+        // recorded rather than assumed.
+        Log?.Invoke($"wakeUp returned after {(DateTime.UtcNow - started).TotalMilliseconds:F0}ms");
+        _lastCommandUtc = DateTime.UtcNow;
+        _lastDurationSec = 0;
         return null;
     }
 
