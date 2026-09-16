@@ -130,6 +130,42 @@ public class ReachyMiniJs : SpawnJSObject
 
     #endregion
 
+    #region Audio IN - the robot's own microphone
+
+    /// <summary>
+    /// Fires when the robot's media arrives over WebRTC. <c>Detail.Stream</c> carries BOTH the camera and
+    /// the four-microphone array.
+    /// </summary>
+    /// <remarks>
+    /// 🔴 THIS IS THE ONLY ROUTE TO THE ROBOT'S EARS, and it is not where anyone looks first. The SDK has
+    /// a <c>micStream</c>, and it is the OUTBOUND direction - the browser's microphone sent TO the robot,
+    /// which by default is a gain-zero oscillator placeholder. Reaching for it to capture the robot would
+    /// produce a stream that is silent by construction and never errors.
+    ///
+    /// ⚠️ <b>Every <c>+=</c> needs a matching <c>-=</c> before this object is disposed.</b> An orphaned
+    /// callback into a disposed .NET object is an unhandled exception on a runtime callback, which EXITS
+    /// the WASM runtime rather than failing politely.
+    /// </remarks>
+    public ActionEvent<CustomEvent<ReachyMediaDetail>> OnVideoTrack
+    {
+        get => new(cb => JSRef!.CallVoid("addEventListener", "videoTrack", cb),
+                   cb => JSRef!.CallVoid("removeEventListener", "videoTrack", cb));
+        set { }
+    }
+
+    /// <summary>Fires when the robot answers whether it can carry audio at all.</summary>
+    public ActionEvent<Event> OnMicSupported
+    {
+        get => new(cb => JSRef!.CallVoid("addEventListener", "micSupported", cb),
+                   cb => JSRef!.CallVoid("removeEventListener", "micSupported", cb));
+        set { }
+    }
+
+    /// <summary>Mute or unmute the robot's audio as the page hears it.</summary>
+    public bool SetAudioMuted(bool muted) => JSRef!.Call<bool, bool>("setAudioMuted", muted);
+
+    #endregion
+
     #region Audio out - the robot's own speaker
 
     /// <summary>
