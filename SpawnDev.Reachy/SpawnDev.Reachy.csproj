@@ -4,7 +4,7 @@
 		<TargetFrameworks>net10.0</TargetFrameworks>
 		<Nullable>enable</Nullable>
 		<ImplicitUsings>enable</ImplicitUsings>
-		<Version>0.1.0-preview.2</Version>
+		<Version>0.1.0-preview.3</Version>
 		<PackageReleaseNotes>0.1.0-preview.2 - the choreography is now transport-independent. ReachyBody was bound to ReachyMiniClient, which speaks plain HTTP to the daemon on the LAN, so a page served over HTTPS could never drive a robot (the browser blocks it as mixed content) and a hosted app had no route at all. The surface turned out to be ONE method: ReachyBody calls GotoAsync and nothing else. IReachyMotion is that method and IReachyLifecycle is the connection handling (wake, home, sleep, motor mode), so a second transport - for example the Reachy Mini browser SDK over WebRTC, signalled through a Hugging Face Space - reuses every gesture, the measured motion envelope and the idle life unchanged, instead of growing a second gesture classifier that would eventually disagree with the first. Signatures match ReachyMiniClient's existing members exactly, so it satisfies both interfaces by declaration alone: no shim, no drift, and no change for existing callers.</PackageReleaseNotes>
 		<GeneratePackageOnBuild>True</GeneratePackageOnBuild>
 		<GenerateDocumentationFile>true</GenerateDocumentationFile>

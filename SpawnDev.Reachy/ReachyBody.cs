@@ -93,6 +93,35 @@ public sealed class ReachyBody : IAsyncDisposable
         finally { _moving.Release(); }
     }
 
+    /// <summary>
+    /// Perform a gesture chosen directly, rather than one classified out of written text.
+    /// </summary>
+    /// <remarks>
+    /// The text overload exists because a MODEL writes stage directions and something has to interpret
+    /// them. Code that already knows which motion it wants - "the microphone just opened", "a reply is
+    /// being generated" - should not have to invent an English sentence for the classifier to turn back
+    /// into the gesture it started with. That round trip is not just wasteful: it silently depends on the
+    /// classifier's vocabulary never changing, so a phrasing tweak made for model output would quietly
+    /// stop the app's own state animations.
+    /// </remarks>
+    public async Task PerformAsync(Gesture gesture, GestureStyle style, CancellationToken ct = default)
+    {
+        if (gesture == Gesture.None) return;
+
+        // Same rule as the text overload: never queue. A backlog of state gestures played after the
+        // state has changed is worse than no gesture at all.
+        if (!await _moving.WaitAsync(0, ct)) { Log?.Invoke($"busy, skipped gesture {gesture}"); return; }
+
+        try
+        {
+            Log?.Invoke($"gesture {gesture} (direct)");
+            await RunAsync(gesture, style, ct);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { Log?.Invoke($"gesture failed: {ex.GetType().Name}: {ex.Message}"); }
+        finally { _moving.Release(); }
+    }
+
     /// <summary>Where the robot sits between gestures: head up and attentive.</summary>
     private async Task RestAsync(GestureStyle c, CancellationToken ct, double duration = 0.5) =>
         await _robot.GotoAsync(
