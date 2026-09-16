@@ -70,9 +70,16 @@ public sealed class ReachySpeaker
         var wav = await ToRobotWavAsync(samples, sampleRate).ConfigureAwait(false);
         var seconds = wav.Seconds;
 
+        // ⚠️ LOGGED BEFORE THE UPLOAD, not only after. The first line used to come after both round trips,
+        // so a failure in either produced NO output at all - indistinguishable from this method never
+        // having been called, which is exactly the wrong thing to be unable to tell apart when the only
+        // symptom of a broken speaker path is silence.
+        Log?.Invoke($"[reachy-speak] uploading {wav.Bytes.Length:N0} B, {seconds:F2}s "
+                  + $"(from {samples.Length:N0} samples @{sampleRate} Hz)");
         using (var blob = new Blob(new[] { wav.Bytes }, new BlobOptions { Type = "audio/wav" }))
         {
             var uploadId = await _js.UploadAudioAsync(blob).ConfigureAwait(false);
+            Log?.Invoke($"[reachy-speak] uploaded as '{uploadId}', playing");
             await _js.PlayUploadedAudioAsync(uploadId).ConfigureAwait(false);
         }
 
@@ -98,6 +105,50 @@ public sealed class ReachySpeaker
         _js.CancelAudio();
         Log?.Invoke($"[reachy-speak] play end    {(DateTime.UtcNow - startedAt).TotalSeconds:F2}s elapsed");
         return seconds;
+    }
+
+    /// <summary>
+    /// Play a plain tone out of the robot, to prove the speaker path without any model in the way.
+    /// </summary>
+    /// <param name="seconds">How long to hold the tone.</param>
+    /// <param name="hz">Pitch. 440 is unmistakable and comfortably inside a small speaker's range.</param>
+    /// <param name="sampleRate">The rate the tone is generated at - deliberately NOT the robot's, so the
+    /// resampler is exercised rather than bypassed.</param>
+    /// <returns>The clip's length in seconds.</returns>
+    /// <remarks>
+    /// 🔴 THIS EXISTS BECAUSE SILENCE IS THE ONLY SYMPTOM. The daemon accepts audio without validating it
+    /// and never transcodes: a wrong sample rate, a wrong bit depth or a wrong channel count produces
+    /// silence or wrong-pitch playback, and returns success either way. So the transport has to be proved
+    /// by ear, with something whose correctness is obvious the instant it is heard.
+    ///
+    /// ⭐ And it has to be provable WITHOUT the rest of the stack. Reaching this path through a real reply
+    /// costs a language model and then a cold text-to-speech load - minutes, during which a failure could
+    /// be either of them. A tone isolates the part that is actually in question: resample, encode, upload,
+    /// play. The sibling LAN app has had exactly this as <c>--test-speaker</c> for the same reason.
+    ///
+    /// ⚠️ Generated at 24 kHz on purpose. Producing it at the robot's own 16 kHz would skip the resampler,
+    /// which is the single most likely thing to be wrong and the hardest to hear when it is subtly off.
+    /// A resampling bug makes this come out at the wrong PITCH, which is instantly recognisable.
+    /// </remarks>
+    public Task<double> PlayTestToneAsync(double seconds = 1.0, double hz = 440, int sampleRate = 24000,
+        CancellationToken ct = default)
+    {
+        var count = (int)(seconds * sampleRate);
+        var samples = new float[count];
+        for (var i = 0; i < count; i++)
+            samples[i] = (float)(0.35 * Math.Sin(2 * Math.PI * hz * i / sampleRate));
+
+        // A short fade at each end: a square-edged start and stop on a tone is a click through a speaker,
+        // and a click is easy to mistake for the tone itself having played.
+        var fade = Math.Min(sampleRate / 100, count / 2);
+        for (var i = 0; i < fade; i++)
+        {
+            var g = (float)i / fade;
+            samples[i] *= g;
+            samples[count - 1 - i] *= g;
+        }
+
+        return PlayAsync(samples, sampleRate, ct);
     }
 
     /// <summary>

@@ -59,7 +59,7 @@ public sealed class ReachyWebRtcTransport : IReachyMotion, IReachyLifecycle, IAs
         // launched from there is measured while the head is still climbing out of that pose - which is
         // indistinguishable from a wrong layout. Homing first makes the starting point the same every run.
         await GoHomeAsync(0.8, ct).ConfigureAwait(false);
-        await Task.Delay(900, ct).ConfigureAwait(false);
+        await Task.Delay(1600, ct).ConfigureAwait(false);   // 0.8s of travel, plus room to settle
 
         await GotoAsync(headPose: new XyzRpyPose(Z: probeZ), duration: 0.6, ct: ct).ConfigureAwait(false);
 
@@ -74,6 +74,7 @@ public sealed class ReachyWebRtcTransport : IReachyMotion, IReachyLifecycle, IAs
         // nothing for it to latch onto; only the real one moves.
         double rowMajorZ = 0, colMajorZ = 0;
         var sawMatrix = false;
+        var sawSample = false;
         var deadline = DateTime.UtcNow.AddMilliseconds(3500);
         while (DateTime.UtcNow < deadline)
         {
@@ -83,8 +84,15 @@ public sealed class ReachyWebRtcTransport : IReachyMotion, IReachyLifecycle, IAs
             var sample = _js.HeadMatrix;
             if (sample is not { Length: 16 }) continue;
             sawMatrix = true;
-            if (Math.Abs(sample[11]) > Math.Abs(rowMajorZ)) rowMajorZ = sample[11];
-            if (Math.Abs(sample[14]) > Math.Abs(colMajorZ)) colMajorZ = sample[14];
+            // ⚠️ CLOSEST TO THE COMMANDED VALUE, not largest magnitude. Largest-magnitude was wrong in a
+            // way that looked right: the head's LOW resting pose lives in the same slot as the probe, so
+            // a sample taken while it was still down latched -0.0203 for a commanded +0.0200 - the right
+            // size, the wrong sign, reported as "NEITHER slot matched". The wrong slot sits at 0.0000
+            // throughout, and 0.0000 is never within tolerance of the probe, so distance separates them
+            // cleanly while magnitude does not.
+            if (!sawSample || Math.Abs(sample[11] - probeZ) < Math.Abs(rowMajorZ - probeZ)) rowMajorZ = sample[11];
+            if (!sawSample || Math.Abs(sample[14] - probeZ) < Math.Abs(colMajorZ - probeZ)) colMajorZ = sample[14];
+            sawSample = true;
 
             // Decided: one of them reached the commanded lift, so there is nothing left to wait for.
             if (Math.Abs(rowMajorZ - probeZ) < probeZ * 0.5 || Math.Abs(colMajorZ - probeZ) < probeZ * 0.5)
