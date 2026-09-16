@@ -4,7 +4,7 @@
 		<TargetFrameworks>net10.0</TargetFrameworks>
 		<Nullable>enable</Nullable>
 		<ImplicitUsings>enable</ImplicitUsings>
-		<Version>0.1.0-preview.1</Version>
+		<Version>0.1.0-preview.2</Version>
 		<GeneratePackageOnBuild>True</GeneratePackageOnBuild>
 		<GenerateDocumentationFile>true</GenerateDocumentationFile>
 		<EmbedAllSources>true</EmbedAllSources>
@@ -12,7 +12,7 @@
 		<Title>SpawnDev.Reachy.Browser</Title>
 		<Authors>LostBeard</Authors>
 		<Description>Drive a Reachy Mini from a browser over WebRTC, signalled through Hugging Face. A SpawnJS wrapper over @pollen-robotics/reachy-mini-sdk that implements SpawnDev.Reachy's IReachyMotion and IReachyLifecycle, so ReachyBody's gesture library, measured motion envelope and idle life run unchanged against a remote robot. This is the only route from a page served over HTTPS: the robot's daemon speaks plain HTTP on the LAN, which a secure page may not touch.</Description>
-		<PackageReleaseNotes>0.1.0-preview.1 - first release. ReachyMiniJs (typed SpawnJS wrapper over the browser SDK, pinned to @pollen-robotics/reachy-mini-sdk 1.8.0, loaded via JS.Import so no JavaScript ships here) and ReachyWebRtcTransport (IReachyMotion + IReachyLifecycle over it, plus robot-speaker audio out). Verified end to end on a real wireless Reachy Mini, daemon v1.10.0: Hugging Face sign-in, signalling, robot pick, WebRTC session, wake, and commanded head motion arriving on the robot. Wireless robots only - the central signalling server does not serve the Lite.</PackageReleaseNotes>
+		<PackageReleaseNotes>0.1.0-preview.2 - adds ReachySpeaker: synthesised speech played out of the robot's OWN speaker, so a character with a body sounds like it is in the room. Converts to the 16 kHz mono 16-bit WAV the daemon requires (it does not transcode, and the symptom of getting it wrong is silence or wrong-speed audio rather than an error), resampling with the browser's OfflineAudioContext so the band-limiting is native and this library needs no DSP of its own. Playback is daemon-side on the daemon's clock, which keeps speech and motion from drifting apart over a wireless link, and play start/end are logged so clips not overlapping is verifiable from the timeline rather than only by ear.</PackageReleaseNotes>
 		<PackageProjectUrl>https://github.com/LostBeard/SpawnDev.Reachy</PackageProjectUrl>
 		<PackageReadmeFile>README.md</PackageReadmeFile>
 		<PackageLicenseFile>LICENSE.txt</PackageLicenseFile>

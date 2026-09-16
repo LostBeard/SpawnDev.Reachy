@@ -217,6 +217,71 @@ if (args.Contains("--audition"))
     return await VoiceCandidates.AuditionAsync(args);
 }
 
+if (args.Contains("--test-speaker"))
+{
+    // 🔴 PROVES THE WAV FORMAT ON THE REAL ROBOT. The daemon does NOT transcode and does NOT validate:
+    // it plays whatever it is handed, so a wrong rate, a wrong header or wrong-endian samples are SILENCE
+    // or wrong-speed audio, never an error. That makes the format the one part of robot audio that cannot
+    // be proven by reading code, and the browser path (ReachySpeaker -> uploadAudio) has no harness of its
+    // own - it needs a Hugging Face sign-in and a live WebRTC session. This exercises the same encoder
+    // over the LAN, where a person can simply listen.
+    //   --test-speaker [ip]
+    var spIp = args.FirstOrDefault(a => !a.StartsWith("--") && a.Contains('.')) ?? "192.168.1.170";
+    using var spRobot = new ReachyMiniClient(spIp);
+
+    // 440 Hz for one second at the daemon's required 16 kHz, with a short fade so the start and end are
+    // not clicks. A tone rather than speech on purpose: pitch and duration are things an ear can JUDGE.
+    // Wrong sample rate is audibly the wrong pitch and the wrong length, which is exactly the failure the
+    // daemon will not report.
+    const int rate = 16000;
+    var tone = new float[rate];
+    for (var i = 0; i < tone.Length; i++)
+    {
+        var fade = Math.Min(1.0, Math.Min(i, tone.Length - 1 - i) / (rate * 0.02));
+        tone[i] = (float)(0.35 * fade * Math.Sin(2 * Math.PI * 440 * i / rate));
+    }
+
+    var wav = EncodeWav16Local(tone, rate);
+    Console.WriteLine($"[speaker] robot {spIp}: uploading {wav.Length:N0} B, 1.00s of 440 Hz @{rate} Hz");
+    var name = $"spawndev-speaker-test.wav";
+    using (var ms = new MemoryStream(wav))
+        await spRobot.UploadSoundAsync(name, ms);
+
+    var t0 = DateTime.UtcNow;
+    Console.WriteLine("[speaker] play start");
+    await spRobot.PlaySoundAsync(name);
+    await Task.Delay(1400);
+    Console.WriteLine($"[speaker] play end after {(DateTime.UtcNow - t0).TotalSeconds:F2}s");
+    Console.WriteLine();
+    Console.WriteLine("EXPECTED: one clear 1-second tone, middle A, from the ROBOT's speaker.");
+    Console.WriteLine("  silence      -> the daemon took the file but the header is wrong");
+    Console.WriteLine("  wrong pitch  -> the sample rate in the header does not match the samples");
+    Console.WriteLine("  buzzy/harsh  -> sample scaling or endianness is wrong");
+    return 0;
+
+    // The same encoder shape ReachySpeaker uses, kept here rather than referenced so this test does not
+    // depend on the browser package (which cannot even load outside a browser).
+    static byte[] EncodeWav16Local(float[] samples, int sampleRate)
+    {
+        const int channels = 1, bits = 16;
+        var dataBytes = samples.Length * 2;
+        var bytes = new byte[44 + dataBytes];
+        var w = new BinaryWriter(new MemoryStream(bytes));
+        w.Write("RIFF"u8.ToArray()); w.Write(36 + dataBytes); w.Write("WAVE"u8.ToArray());
+        w.Write("fmt "u8.ToArray()); w.Write(16); w.Write((short)1); w.Write((short)channels);
+        w.Write(sampleRate); w.Write(sampleRate * channels * bits / 8);
+        w.Write((short)(channels * bits / 8)); w.Write((short)bits);
+        w.Write("data"u8.ToArray()); w.Write(dataBytes);
+        foreach (var v in samples)
+        {
+            var c = v > 1f ? 1f : v < -1f ? -1f : v;
+            w.Write((short)(c * short.MaxValue));
+        }
+        w.Flush();
+        return bytes;
+    }
+}
+
 if (args.Contains("--park"))
 {
     // The shutdown sequence on its own, so the park can be watched without sitting

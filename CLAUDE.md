@@ -18,6 +18,7 @@ Needs Ollama with `llama3.1:8b`. Speech models (~250MB, not in git): `dotnet run
 | `--talk` | the live conversation loop |
 | `--test-loop` | whole chain end to end, synthesised question standing in for a person |
 | `--test-ears <file.wav>` | VAD + transcription on a file, no robot needed |
+| `--test-speaker [ip]` | plays a 1 s 440 Hz tone THROUGH THE ROBOT to prove the WAV format. The daemon does not validate - wrong format is silence or wrong pitch, never an error - so this is judged BY EAR |
 | `--test-brain` | the language model alone, latency per reply |
 | `--test-names` | what recognition ACTUALLY returns for each character name |
 
