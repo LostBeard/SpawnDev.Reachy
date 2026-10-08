@@ -1,5 +1,19 @@
 # Changelog
 
+## SpawnDev.Reachy 0.1.0-preview.4 / SpawnDev.Reachy.Browser 0.1.0-preview.5 (2026-10-08)
+
+Dependency update to the SpawnDev.SpawnJS 3 line. No Reachy code change.
+
+- **SpawnDev.Reachy: SpawnDev.RTC 2.2.3 -> 2.3.1.** NuGet resolves the LOWEST version that satisfies a
+  dependency, so every app referencing preview.3 got RTC 2.2.3 and its SpawnJS 2 set (SpawnDev.MultiMedia 2.2,
+  SpawnDev.SpawnJS.Cryptography 2.0, SpawnDev.SIPSorcery 10.0.8), even an app already on SpawnJS 3. RTC 2.3.1
+  brings MultiMedia 2.4, Cryptography 2.1 and SIPSorcery 10.0.10, which handles SCTP FORWARD TSN: a desktop data
+  channel no longer stalls when the peer abandons unreliable chunks.
+- **SpawnDev.Reachy.Browser: SpawnDev.SpawnJS 2.1.17 -> 3.0.2** (one .NET/JS crossing per call).
+- `SpawnDev.Reachy.Rose` (app, not packaged): SpawnDev.Phonemizer 1.0.0 -> 1.1.1, SpawnDev.SIPSorcery 10.0.8 -> 10.0.10.
+- XML docs for the `ct` parameters of `ReachySpeaker.PlayAsync`, `PlayTestToneAsync` and
+  `ReachyWebRtcTransport.VerifyHeadMatrixConventionAsync`.
+
 ## 0.1.0-preview.3 (`SpawnDev.Reachy.Browser`)
 
 **`ReachyEars` delivered no audio in preview.2.** Everything reported healthy: the robot's track arrived

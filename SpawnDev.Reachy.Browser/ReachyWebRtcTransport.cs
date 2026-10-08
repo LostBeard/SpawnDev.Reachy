@@ -52,6 +52,7 @@ public sealed class ReachyWebRtcTransport : IReachyMotion, IReachyLifecycle, IAs
     /// layouts in one move. Run it once against hardware and pin the result.
     /// </remarks>
     /// <param name="probeZ">A lift big enough to read clearly but inside the envelope, in metres.</param>
+    /// <param name="ct">Cancels the probe.</param>
     /// <returns>The measured Z under each layout, and which one matched.</returns>
     public async Task<string> VerifyHeadMatrixConventionAsync(double probeZ = 0.02, CancellationToken ct = default)
     {

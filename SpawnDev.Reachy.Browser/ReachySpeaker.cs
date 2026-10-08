@@ -56,6 +56,7 @@ public sealed class ReachySpeaker
     /// </summary>
     /// <param name="samples">Mono float PCM, -1..1.</param>
     /// <param name="sampleRate">The rate <paramref name="samples"/> are at.</param>
+    /// <param name="ct">Cancels the wait for the clip to finish and stops the robot playing it. The upload itself is not cancelled.</param>
     /// <returns>The clip's length in seconds, matching the player this replaces.</returns>
     /// <remarks>
     /// ⚠️ There is no <c>finished</c> event for standalone audio, so the wait is the clip's own duration
@@ -114,6 +115,7 @@ public sealed class ReachySpeaker
     /// <param name="hz">Pitch. 440 is unmistakable and comfortably inside a small speaker's range.</param>
     /// <param name="sampleRate">The rate the tone is generated at - deliberately NOT the robot's, so the
     /// resampler is exercised rather than bypassed.</param>
+    /// <param name="ct">As for <see cref="PlayAsync"/>: stops the tone early.</param>
     /// <returns>The clip's length in seconds.</returns>
     /// <remarks>
     /// 🔴 THIS EXISTS BECAUSE SILENCE IS THE ONLY SYMPTOM. The daemon accepts audio without validating it

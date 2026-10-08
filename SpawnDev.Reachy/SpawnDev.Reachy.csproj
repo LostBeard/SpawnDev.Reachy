@@ -4,8 +4,8 @@
 		<TargetFrameworks>net10.0</TargetFrameworks>
 		<Nullable>enable</Nullable>
 		<ImplicitUsings>enable</ImplicitUsings>
-		<Version>0.1.0-preview.3</Version>
-		<PackageReleaseNotes>0.1.0-preview.2 - the choreography is now transport-independent. ReachyBody was bound to ReachyMiniClient, which speaks plain HTTP to the daemon on the LAN, so a page served over HTTPS could never drive a robot (the browser blocks it as mixed content) and a hosted app had no route at all. The surface turned out to be ONE method: ReachyBody calls GotoAsync and nothing else. IReachyMotion is that method and IReachyLifecycle is the connection handling (wake, home, sleep, motor mode), so a second transport - for example the Reachy Mini browser SDK over WebRTC, signalled through a Hugging Face Space - reuses every gesture, the measured motion envelope and the idle life unchanged, instead of growing a second gesture classifier that would eventually disagree with the first. Signatures match ReachyMiniClient's existing members exactly, so it satisfies both interfaces by declaration alone: no shim, no drift, and no change for existing callers.</PackageReleaseNotes>
+		<Version>0.1.0-preview.4</Version>
+		<PackageReleaseNotes>0.1.0-preview.4 - Dependency update, no Reachy code change: SpawnDev.RTC 2.2.3 -> 2.3.1, the SpawnDev.SpawnJS 3 line (with SpawnDev.MultiMedia 2.4, SpawnDev.SpawnJS.Cryptography 2.1 and SpawnDev.SIPSorcery 10.0.10, which handles SCTP FORWARD TSN so a desktop data channel survives a peer that abandons unreliable chunks). Before this, an app on SpawnJS 3 that referenced Reachy resolved RTC 2.2.3 and its SpawnJS 2 dependency set. Full history: CHANGELOG.md</PackageReleaseNotes>
 		<GeneratePackageOnBuild>True</GeneratePackageOnBuild>
 		<GenerateDocumentationFile>true</GenerateDocumentationFile>
 		<EmbedAllSources>true</EmbedAllSources>
@@ -36,7 +36,7 @@
 		<!-- RoseAudioLink rides SpawnDev.RTC's cross-platform IRTCPeerConnection (browser + desktop),
 		     which bundles the SipSorcery fork and the PCM audio bridge. Concentus + the direct
 		     SpawnDev.SIPSorcery reference are no longer needed here. -->
-		<PackageReference Include="SpawnDev.RTC" Version="2.2.3" />
+		<PackageReference Include="SpawnDev.RTC" Version="2.3.1" />
 	</ItemGroup>
 
 </Project>

@@ -4,7 +4,7 @@
 		<TargetFrameworks>net10.0</TargetFrameworks>
 		<Nullable>enable</Nullable>
 		<ImplicitUsings>enable</ImplicitUsings>
-		<Version>0.1.0-preview.4</Version>
+		<Version>0.1.0-preview.5</Version>
 		<GeneratePackageOnBuild>True</GeneratePackageOnBuild>
 		<GenerateDocumentationFile>true</GenerateDocumentationFile>
 		<EmbedAllSources>true</EmbedAllSources>
@@ -12,7 +12,7 @@
 		<Title>SpawnDev.Reachy.Browser</Title>
 		<Authors>LostBeard</Authors>
 		<Description>Drive a Reachy Mini from a browser over WebRTC, signalled through Hugging Face. A SpawnJS wrapper over @pollen-robotics/reachy-mini-sdk that implements SpawnDev.Reachy's IReachyMotion and IReachyLifecycle, so ReachyBody's gesture library, measured motion envelope and idle life run unchanged against a remote robot. This is the only route from a page served over HTTPS: the robot's daemon speaks plain HTTP on the LAN, which a secure page may not touch.</Description>
-		<PackageReleaseNotes>0.1.0-preview.3 - FIXES ReachyEars, which in preview.2 delivered no audio at all. The robot's remote audio track reports live and unmuted (the browser only unmutes once RTP is arriving), and a MediaStreamTrackProcessor built on it still sat on a read that never completed and never threw: Chrome does not run the decode pipeline for a remote audio track that nothing renders. ReachyEars now attaches its own muted, off-screen audio element as that sink - muted so the robot's microphone is not played into the room it is listening to, and so it stays inside the autoplay policy on a page with no user gesture. VERIFIED on hardware: 480-sample frames at 48 kHz, 803 chunks with live room levels. Also reports the track's readyState, muted and enabled the moment media arrives, and logs mute/unmute/ended transitions - a present-but-silent track is otherwise indistinguishable from a broken capture.</PackageReleaseNotes>
+		<PackageReleaseNotes>0.1.0-preview.5 - Dependency update, no code change: SpawnDev.SpawnJS 2.1.17 -> 3.0.2 (one .NET/JS crossing per call) and SpawnDev.Reachy 0.1.0-preview.4 (SpawnDev.RTC 2.3.1). Full history: CHANGELOG.md</PackageReleaseNotes>
 		<PackageProjectUrl>https://github.com/LostBeard/SpawnDev.Reachy</PackageProjectUrl>
 		<PackageReadmeFile>README.md</PackageReadmeFile>
 		<PackageLicenseFile>LICENSE.txt</PackageLicenseFile>
@@ -39,7 +39,7 @@
 		<!-- ProjectReference, not PackageReference: the two move together and this repo builds them both.
 		     Consumers get SpawnDev.Reachy transitively at the version packed alongside. -->
 		<ProjectReference Include="..\SpawnDev.Reachy\SpawnDev.Reachy.csproj" />
-		<PackageReference Include="SpawnDev.SpawnJS" Version="2.1.17" />
+		<PackageReference Include="SpawnDev.SpawnJS" Version="3.0.2" />
 	</ItemGroup>
 
 </Project>
