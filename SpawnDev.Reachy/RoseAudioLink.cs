@@ -90,7 +90,11 @@ public sealed class RoseAudioLink : IAsyncDisposable
     /// <c>srcObject</c>) and the browser decodes and shows it, with no pictures crossing into .NET. <see cref="OnVideoFrame"/> is the other path - decoded pictures as pixels, desktop only. They are
     /// independent; take either, both, or neither.
     /// </summary>
-    /// <remarks>Subscribe BEFORE <see cref="ConnectAsync"/>, like <see cref="OnAudioTrack"/>; a late subscriber can read <see cref="VideoTrack"/>. The video m-line itself is unchanged (recvonly): it is also what keeps the session's BUNDLE transport alive.</remarks>
+    /// <remarks>
+    /// Subscribe BEFORE <see cref="ConnectAsync"/>, like <see cref="OnAudioTrack"/>; a late subscriber can read <see cref="VideoTrack"/>. The video m-line itself is unchanged (recvonly): it is also what keeps the session's BUNDLE transport alive.
+    /// ⚠️ A remote track's <c>GetSettings()</c> has only the device id and resize mode when it ARRIVES: width, height, frame rate and aspect ratio appear after the first frame has decoded (a few seconds later; measured
+    /// 1280x720 at about 29 fps). Read them from the video element, or wait, rather than from this event. In the browser the wrapper's <c>NativeTrack</c> is a shared object: disposing it disposes it for the wrapper too.
+    /// </remarks>
     public event Action<IRTCMediaStreamTrack>? OnVideoTrack;
 
     /// <summary>The robot's camera track, once received. Null before that.</summary>
