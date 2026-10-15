@@ -85,6 +85,17 @@ public sealed class RoseAudioLink : IAsyncDisposable
     /// <summary>The robot's audio track, once received. Null before that.</summary>
     public IRTCMediaStreamTrack? AudioTrack { get; private set; }
 
+    /// <summary>
+    /// Raised with the robot's camera track as soon as it arrives. This is the handle a BROWSER host wants: attach the track to a <c>&lt;video&gt;</c> element (its native track into a MediaStream as
+    /// <c>srcObject</c>) and the browser decodes and shows it, with no pictures crossing into .NET. <see cref="OnVideoFrame"/> is the other path - decoded pictures as pixels, desktop only. They are
+    /// independent; take either, both, or neither.
+    /// </summary>
+    /// <remarks>Subscribe BEFORE <see cref="ConnectAsync"/>, like <see cref="OnAudioTrack"/>; a late subscriber can read <see cref="VideoTrack"/>. The video m-line itself is unchanged (recvonly): it is also what keeps the session's BUNDLE transport alive.</remarks>
+    public event Action<IRTCMediaStreamTrack>? OnVideoTrack;
+
+    /// <summary>The robot's camera track, once received. Null before that.</summary>
+    public IRTCMediaStreamTrack? VideoTrack { get; private set; }
+
     /// <summary>Raised when the peer connection state changes (W3C connection-state string).</summary>
     public event Action<string>? OnConnectionStateChanged;
 
@@ -170,8 +181,16 @@ public sealed class RoseAudioLink : IAsyncDisposable
 
         _pc.OnTrack += trackEvent =>
         {
-            // The video transceiver exists only to keep the BUNDLE tag alive (see above), so its track is
-            // deliberately ignored.
+            // The video transceiver exists to keep the BUNDLE tag alive (see above); its track is handed to whoever wants to look at it (OnVideoTrack), and decoded to pictures only on desktop
+            // and only if OnVideoFrame has a handler (see the receiver set up with the transceiver).
+            if (trackEvent.Track?.Kind == "video" && VideoTrack is null)
+            {
+                VideoTrack = trackEvent.Track;
+                Log?.Invoke("video track received");
+                try { OnVideoTrack?.Invoke(trackEvent.Track); }
+                catch (Exception ex) { Log?.Invoke($"OnVideoTrack handler threw: {ex.GetType().Name}: {ex.Message}"); }
+                return;
+            }
             if (trackEvent.Track?.Kind != "audio" || AudioTrack is not null) return;
             AudioTrack = trackEvent.Track;
             Log?.Invoke("audio track received");
