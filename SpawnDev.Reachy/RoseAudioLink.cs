@@ -76,6 +76,19 @@ public sealed class RoseAudioLink : IAsyncDisposable
     /// </summary>
     public bool StreamSpeech { get; set; }
 
+    /// <summary>
+    /// Chunks the SCTP sender may send per burst on the robot's data channel (0 = the library default, 4). The data channel is the audio upload path, and its throughput is capped at about
+    /// <c>SctpMaxBurst * 1300 B / RTT</c>: measured 2026-10-15 on a healthy LAN, the default moved ~170 KB/s while plain TCP on the same link moved 6.6 MB/s. The robot is on the LAN, so the
+    /// default here is high. Set before <see cref="ConnectAsync"/>. Desktop only.
+    /// </summary>
+    public int SctpMaxBurst { get; set; } = 32;
+
+    /// <summary>
+    /// Milliseconds the SCTP sender waits between bursts when no acknowledgement wakes it (0 = the library default, 50). 10 measured best with <see cref="SctpMaxBurst"/> 32 against a real robot
+    /// (a 400 KB clip in 350 ms; MaxBurst 4 and the default period: 2.3 s). Set before <see cref="ConnectAsync"/>. Desktop only.
+    /// </summary>
+    public int SctpBurstPeriodMilliseconds { get; set; } = 10;
+
     /// <summary>The live speech stream to the robot's speaker (null unless <see cref="StreamSpeech"/> was set before connecting).</summary>
     public RobotSpeechStreamer? Speech { get; private set; }
 
@@ -162,6 +175,10 @@ public sealed class RoseAudioLink : IAsyncDisposable
             // ECDSA-only offer gets handshake_failure(40). The browser ignores this (native WebRTC
             // negotiates RSA without help). This is the whole original blocker, now a config flag.
             X_UseRsaForDtlsCertificate = true,
+
+            // The data channel carries the audio uploads; see SctpMaxBurst.
+            X_SctpMaxBurst = SctpMaxBurst,
+            X_SctpBurstPeriodMilliseconds = SctpBurstPeriodMilliseconds,
         });
 
         // A recvonly VIDEO track must be declared even though we only want audio. The robot's offer is

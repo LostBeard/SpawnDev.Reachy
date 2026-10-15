@@ -4,7 +4,7 @@
 		<TargetFrameworks>net10.0</TargetFrameworks>
 		<Nullable>enable</Nullable>
 		<ImplicitUsings>enable</ImplicitUsings>
-		<Version>0.1.0-local.22</Version>
+		<Version>0.1.0-local.24</Version>
 		<PackageReleaseNotes>0.1.0-preview.4 - Dependency update, no Reachy code change: SpawnDev.RTC 2.2.3 -> 2.3.1, the SpawnDev.SpawnJS 3 line (with SpawnDev.MultiMedia 2.4, SpawnDev.SpawnJS.Cryptography 2.1 and SpawnDev.SIPSorcery 10.0.10, which handles SCTP FORWARD TSN so a desktop data channel survives a peer that abandons unreliable chunks). Before this, an app on SpawnJS 3 that referenced Reachy resolved RTC 2.2.3 and its SpawnJS 2 dependency set. Full history: CHANGELOG.md</PackageReleaseNotes>
 		<GeneratePackageOnBuild>True</GeneratePackageOnBuild>
 		<GenerateDocumentationFile>true</GenerateDocumentationFile>
@@ -36,7 +36,7 @@
 		<!-- RoseAudioLink rides SpawnDev.RTC's cross-platform IRTCPeerConnection (browser + desktop),
 		     which bundles the SipSorcery fork and the PCM audio bridge. Concentus + the direct
 		     SpawnDev.SIPSorcery reference are no longer needed here. -->
-		<PackageReference Include="SpawnDev.RTC" Version="2.4.0-local.2" />
+		<PackageReference Include="SpawnDev.RTC" Version="2.4.0-local.3" />
 	</ItemGroup>
 
 </Project>
