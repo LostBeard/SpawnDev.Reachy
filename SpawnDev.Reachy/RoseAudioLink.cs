@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using SpawnDev.RTC;
 using SpawnDev.RTC.Audio;
+using SpawnDev.RTC.Video;
 
 namespace SpawnDev.Reachy;
 
@@ -26,6 +27,7 @@ public sealed class RoseAudioLink : IAsyncDisposable
     private IRTCPeerConnection? _pc;
     private IRTCRtpTransceiver? _audioTransceiver;
     private IRTCAudioReceiver? _micReceiver;
+    private IRTCVideoReceiver? _videoReceiver;
     private CancellationTokenSource? _cts;
     private Task? _pump;
     private volatile bool _remoteDescriptionSet;
@@ -56,6 +58,19 @@ public sealed class RoseAudioLink : IAsyncDisposable
     /// speech recognition. They are independent; take either, both, or neither.
     /// </remarks>
     public event Action<IRTCMediaStreamTrack>? OnAudioTrack;
+
+    /// <summary>
+    /// Raised with the robot's camera pictures (BGRA, top row first), at most <see cref="VideoMaxFramesPerSecond"/> a second. The H.264 stream is decoded by SpawnDev.RTC's
+    /// video receiver (Media Foundation on Windows), so the decoder runs only when a handler is attached. Handlers must not block.
+    /// </summary>
+    /// <remarks>
+    /// Subscribe BEFORE <see cref="ConnectAsync"/>, like <see cref="OnMicAudio"/>. Desktop only for now (the browser path of the video receiver is not written). Frames only show
+    /// the room while the robot's head is up: asleep, the camera looks into the shell and the picture is nearly black.
+    /// </remarks>
+    public event Action<RTCVideoFrame>? OnVideoFrame;
+
+    /// <summary>The most camera pictures per second delivered through <see cref="OnVideoFrame"/> (every frame is still decoded). Default 5; set before <see cref="ConnectAsync"/>.</summary>
+    public double VideoMaxFramesPerSecond { get; set; } = 5;
 
     /// <summary>The robot's audio track, once received. Null before that.</summary>
     public IRTCMediaStreamTrack? AudioTrack { get; private set; }
@@ -124,6 +139,14 @@ public sealed class RoseAudioLink : IAsyncDisposable
         // comes up and our ICE lands on audio1 where the robot ignores it. recvonly keeps the tag alive;
         // we simply never read the decoded video.
         _pc.AddTransceiver("video", new RTCRtpTransceiverInit { Direction = "recvonly" });
+        if (OnVideoFrame is not null && !OperatingSystem.IsBrowser())
+        {
+            _videoReceiver = _pc.ReceiveVideoFrames();
+            _videoReceiver.MaxFramesPerSecond = VideoMaxFramesPerSecond;
+            _videoReceiver.OnFrame += f => { try { OnVideoFrame?.Invoke(f); } catch (Exception ex) { Log?.Invoke($"OnVideoFrame handler threw: {ex.GetType().Name}: {ex.Message}"); } };
+            _videoReceiver.OnError += e => Log?.Invoke("video: " + e);
+            _videoReceiver.Start();
+        }
         // Audio is sendrecv on the robot's offer; declare the same so the mic comes up AND the one session
         // carries a send path out to the robot's speaker (see SetSendTrackAsync).
         _audioTransceiver = _pc.AddTransceiver("audio", new RTCRtpTransceiverInit { Direction = "sendrecv" });
@@ -320,6 +343,7 @@ public sealed class RoseAudioLink : IAsyncDisposable
         try { _cts?.Cancel(); } catch { }
         try { if (_pump is not null) await _pump; } catch { }
         _micReceiver?.Dispose();
+        _videoReceiver?.Dispose();
         _pc?.Close();
         _pc?.Dispose();
         if (_signalling is not null) await _signalling.DisposeAsync();
