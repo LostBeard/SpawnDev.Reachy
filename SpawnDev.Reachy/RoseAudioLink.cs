@@ -244,6 +244,7 @@ public sealed class RoseAudioLink : IAsyncDisposable
             {
                 try
                 {
+                    Log?.Invoke("offer SDP:" + Environment.NewLine + sdp);
                     await _pc.SetRemoteDescription(new RTCSessionDescriptionInit { Type = "offer", Sdp = sdp });
                     Log?.Invoke("setRemoteDescription ok");
 
@@ -253,6 +254,7 @@ public sealed class RoseAudioLink : IAsyncDisposable
                     var answer = await _pc.CreateAnswer();
                     var answerSdp = answer.Sdp
                         ?? throw new InvalidOperationException("createAnswer produced no SDP");
+                    Log?.Invoke("answer SDP:" + Environment.NewLine + answerSdp);
                     await _pc.SetLocalDescription(answer);
                     await _signalling.SendAnswerAsync(answerSdp, token);
                     Log?.Invoke("answer sent");

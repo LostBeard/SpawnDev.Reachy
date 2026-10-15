@@ -16,7 +16,7 @@ var amplitude = Num("--amplitude", 0.25);
 await using var link = new RoseAudioLink(host) { StreamSpeech = true };
 var micFrames = 0;
 link.OnMicAudio += _ => Interlocked.Increment(ref micFrames);
-link.Log += m => { if (m.Contains("track") || m.Contains("state") || m.Contains("send")) Console.WriteLine("  [link] " + m); };
+link.Log += m => { if (m.Contains("track") || m.Contains("state") || m.Contains("send") || m.Contains("SDP")) Console.WriteLine("  [link] " + m); };
 var connect = System.Diagnostics.Stopwatch.StartNew();
 await link.ConnectAsync();
 Console.WriteLine($"connected in {connect.ElapsedMilliseconds} ms; speech stream: {(link.Speech != null ? "ready" : "NOT created")}");
