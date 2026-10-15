@@ -90,7 +90,7 @@ public sealed class ReachyBody : IAsyncDisposable
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { Log?.Invoke($"gesture failed: {ex.GetType().Name}: {ex.Message}"); }
-        finally { _moving.Release(); }
+        finally { LastMoveTick = Environment.TickCount64; _moving.Release(); }
     }
 
     /// <summary>
@@ -119,7 +119,7 @@ public sealed class ReachyBody : IAsyncDisposable
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { Log?.Invoke($"gesture failed: {ex.GetType().Name}: {ex.Message}"); }
-        finally { _moving.Release(); }
+        finally { LastMoveTick = Environment.TickCount64; _moving.Release(); }
     }
 
     // ---- where the robot is facing --------------------------------------------
@@ -144,27 +144,35 @@ public sealed class ReachyBody : IAsyncDisposable
     /// the rest. Unlike a gesture this is a decision (it matters that the robot ends up looking at the person), so it waits a moment for a gesture in progress rather than skipping.
     /// </summary>
     /// <param name="yawLeft">Radians to turn from the current heading: positive to the robot's left.</param>
-    public async Task TurnTowardAsync(double yawLeft, GestureStyle style, double duration = 0.9, CancellationToken ct = default)
+    /// <param name="waitMs">How long to wait for a gesture in progress to finish first; 0 = do not wait (a correction that is not made now is not worth making later).</param>
+    public async Task<bool> TurnTowardAsync(double yawLeft, GestureStyle style, double duration = 0.9, CancellationToken ct = default, int waitMs = 1500)
     {
-        if (!await _moving.WaitAsync(1500, ct)) { Log?.Invoke("busy, did not turn"); return; }
+        if (!await _moving.WaitAsync(waitMs, ct)) { if (waitMs > 0) Log?.Invoke("busy, did not turn"); return false; }
         try
         {
             var limit = BodyYawMax + HeadFacingMax;
             var total = Clamp(FacingYaw + yawLeft, -limit, limit);
             var body = Clamp(total, -BodyYawMax, BodyYawMax);
             var head = Clamp(total - body, -HeadFacingMax, HeadFacingMax);
-            if (Math.Abs(body - FacingBodyYaw) < 0.03 && Math.Abs(head - FacingHeadYaw) < 0.03) return;
+            if (Math.Abs(body - FacingBodyYaw) < 0.03 && Math.Abs(head - FacingHeadYaw) < 0.03) return false;
             Log?.Invoke($"turning to face {total * 180 / Math.PI:+0;-0;0} degrees (body {body * 180 / Math.PI:+0;-0;0}, head {head * 180 / Math.PI:+0;-0;0})");
             FacingBodyYaw = body; FacingHeadYaw = head;
             await RestAsync(style, ct, duration);
+            return true;
         }
-        catch (OperationCanceledException) { }
-        catch (Exception ex) { Log?.Invoke($"turn failed: {ex.GetType().Name}: {ex.Message}"); }
-        finally { _moving.Release(); }
+        catch (OperationCanceledException) { return false; }
+        catch (Exception ex) { Log?.Invoke($"turn failed: {ex.GetType().Name}: {ex.Message}"); return false; }
+        finally { LastMoveTick = Environment.TickCount64; _moving.Release(); }
     }
 
+    /// <summary>When the last gesture or turn ended (<see cref="Environment.TickCount64"/>), or 0. A camera picture taken during a move shows the head somewhere it no longer is.</summary>
+    public long LastMoveTick { get; private set; }
+
+    /// <summary>Whether a gesture or a turn is being performed right now.</summary>
+    public bool Moving => _moving.CurrentCount == 0;
+
     /// <summary>Turns back to straight ahead.</summary>
-    public Task RecentreAsync(GestureStyle style, double duration = 1.2, CancellationToken ct = default) => TurnTowardAsync(-FacingYaw, style, duration, ct);
+    public Task<bool> RecentreAsync(GestureStyle style, double duration = 1.2, CancellationToken ct = default) => TurnTowardAsync(-FacingYaw, style, duration, ct);
 
     /// <summary>A head pose around the current facing: whatever yaw a gesture asks for is added to where the robot is facing.</summary>
     private XyzRpyPose Pose(double X = 0, double Y = 0, double Z = 0, double Roll = 0, double Pitch = 0, double Yaw = 0) =>
