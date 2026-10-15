@@ -130,18 +130,22 @@ public sealed class ReachyBody : IAsyncDisposable
     /// </summary>
     public double FacingBodyYaw { get; private set; }
 
-    /// <summary>The head yaw (radians, left positive) the robot rests at between gestures: the part of a large turn the torso could not make.</summary>
+    /// <summary>
+    /// The head yaw (radians, left positive) the robot rests at between gestures: where the CAMERA points. The daemon's head yaw is WORLD-referenced, not relative to the torso (measured 2026-10-15: body commanded
+    /// to 55 degrees with head yaw 0, the body turned and the head kept facing forward; read back: head yaw 75 -> 70.5, 90 -> 88.5 with the body held at 54), so to face a direction the head yaw IS that direction and the
+    /// torso only has to stay within about 65 degrees of it.
+    /// </summary>
     public double FacingHeadYaw { get; private set; }
 
-    /// <summary>Total turn from straight ahead, radians (body plus head).</summary>
-    public double FacingYaw => FacingBodyYaw + FacingHeadYaw;
+    /// <summary>Where the camera points, radians from straight ahead (left positive): the head yaw, which is a world angle.</summary>
+    public double FacingYaw => FacingHeadYaw;
 
-    /// <summary>The most the head turns beyond the torso when a turn is larger than the torso can make, radians.</summary>
-    public const double HeadFacingMax = 0.5;
+    /// <summary>The farthest the head faces, radians (the head yaw limit).</summary>
+    public const double FacingMax = HeadYawMax;
 
     /// <summary>
-    /// Turns to face a direction given relative to where the robot points NOW (left positive), staying turned afterwards: the torso takes the turn up to <see cref="BodyYawMax"/> and the head
-    /// the rest. Unlike a gesture this is a decision (it matters that the robot ends up looking at the person), so it waits a moment for a gesture in progress rather than skipping.
+    /// Turns to face a direction given relative to where the camera points NOW (left positive), staying turned afterwards: the head faces the new direction (its yaw is a world angle) and the torso follows
+    /// up to <see cref="BodyYawMax"/> so the neck is never wound up against it. Unlike a gesture this is a decision (it matters that the robot ends up looking at the person), so it waits a moment for a gesture in progress rather than skipping.
     /// </summary>
     /// <param name="yawLeft">Radians to turn from the current heading: positive to the robot's left.</param>
     /// <param name="waitMs">How long to wait for a gesture in progress to finish first; 0 = do not wait (a correction that is not made now is not worth making later).</param>
@@ -150,10 +154,9 @@ public sealed class ReachyBody : IAsyncDisposable
         if (!await _moving.WaitAsync(waitMs, ct)) { if (waitMs > 0) Log?.Invoke("busy, did not turn"); return false; }
         try
         {
-            var limit = BodyYawMax + HeadFacingMax;
-            var total = Clamp(FacingYaw + yawLeft, -limit, limit);
+            var total = Clamp(FacingYaw + yawLeft, -FacingMax, FacingMax);
             var body = Clamp(total, -BodyYawMax, BodyYawMax);
-            var head = Clamp(total - body, -HeadFacingMax, HeadFacingMax);
+            var head = total;
             if (Math.Abs(body - FacingBodyYaw) < 0.03 && Math.Abs(head - FacingHeadYaw) < 0.03) return false;
             Log?.Invoke($"turning to face {total * 180 / Math.PI:+0;-0;0} degrees (body {body * 180 / Math.PI:+0;-0;0}, head {head * 180 / Math.PI:+0;-0;0})");
             FacingBodyYaw = body; FacingHeadYaw = head;
