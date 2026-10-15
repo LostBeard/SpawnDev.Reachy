@@ -173,6 +173,7 @@ internal record PlaySoundRequest([property: JsonPropertyName("file")] string Fil
 [JsonSerializable(typeof(MediaStatus))]
 [JsonSerializable(typeof(AudioParameter))]
 [JsonSerializable(typeof(MoveHandle))]
+[JsonSerializable(typeof(List<MoveHandle>))]
 [JsonSerializable(typeof(GotoRequest))]
 [JsonSerializable(typeof(VolumeRequest))]
 [JsonSerializable(typeof(PlaySoundRequest))]

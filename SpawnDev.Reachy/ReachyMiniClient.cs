@@ -199,6 +199,56 @@ public class ReachyMiniClient : IDisposable, IReachyMotion, IReachyLifecycle
         return await r.Content.ReadFromJsonAsync(ReachyJson.Default.MoveHandle, ct);
     }
 
+    /// <summary>The ids of the moves the daemon is running right now (a move is listed from the moment its call returns until it ends).</summary>
+    public async Task<IReadOnlyList<string>> GetRunningMovesAsync(CancellationToken ct = default)
+    {
+        var moves = await _http.GetFromJsonAsync("/api/move/running", ReachyJson.Default.ListMoveHandle, ct);
+        return moves?.Select(m => m.Uuid).ToList() ?? [];
+    }
+
+    /// <summary>
+    /// Waits until a queued move has FINISHED, by asking the daemon whether it is still running. Every move call returns as soon as the move is queued,
+    /// so cutting motor power right after one drops the head mid-move; and watching the head's pose for "stillness" is no better, because a queued move
+    /// has not started yet (the pose is still, for a moment, exactly where it began).
+    /// </summary>
+    /// <param name="move">The handle a move call returned. Null (the daemon sent none) waits a fixed couple of seconds instead.</param>
+    /// <param name="timeout">How long to wait at most.</param>
+    /// <returns>True if the move finished, false if the timeout came first.</returns>
+    public async Task<bool> WaitForMoveAsync(MoveHandle? move, TimeSpan timeout, CancellationToken ct = default)
+    {
+        if (move is null)
+        {
+            await Task.Delay(timeout < TimeSpan.FromSeconds(2) ? timeout : TimeSpan.FromSeconds(2), ct).ConfigureAwait(false);
+            return false;
+        }
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        while (true)
+        {
+            var running = await GetRunningMovesAsync(ct).ConfigureAwait(false);
+            if (!running.Contains(move.Uuid, StringComparer.OrdinalIgnoreCase)) return true;
+            if (clock.Elapsed >= timeout) return false;
+            await Task.Delay(100, ct).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Parks the robot the one way that is safe: HOME first, then the daemon's goto_sleep, wait until the sleep move has finished, and only then motors off.
+    /// The motors are released even if a move fails (they can overheat holding a pose), and the failure is rethrown afterwards.
+    /// </summary>
+    public async Task ParkAsync(CancellationToken ct = default)
+    {
+        Exception? failure = null;
+        try
+        {
+            await WaitForMoveAsync(await GoHomeAsync(duration: 1.0, ct).ConfigureAwait(false), TimeSpan.FromSeconds(6), ct).ConfigureAwait(false);
+            await WaitForMoveAsync(await GotoSleepAsync(ct).ConfigureAwait(false), TimeSpan.FromSeconds(15), ct).ConfigureAwait(false);
+            await Task.Delay(300, ct).ConfigureAwait(false);               // let the head settle into the chest
+        }
+        catch (Exception e) when (e is not OperationCanceledException) { failure = e; }
+        await SetMotorModeAsync(MotorMode.Disabled, CancellationToken.None).ConfigureAwait(false);
+        if (failure is not null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
+    }
+
     /// <summary>Cancels whatever move is currently running.</summary>
     public async Task StopMoveAsync(CancellationToken ct = default)
     {
