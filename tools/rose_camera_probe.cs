@@ -5,7 +5,8 @@
 // Connects to the robot over WebRTC and reports what its camera delivers: picture size, frames per second, brightness, and (with --save) one picture as a BMP.
 // READ-ONLY: it does not move the robot. Asleep, the head is down and the picture is nearly black; wake it first to see the room.
 //
-// Usage: dotnet run rose_camera_probe.cs -- [host] [--seconds N] [--fps N] [--save path.bmp]
+// With --wake it wakes the robot first (head up, motors on) and parks it afterwards by the confirmed recipe: home, sleep, wait for the head to stop, motors off.
+// Usage: dotnet run rose_camera_probe.cs -- [host] [--seconds N] [--fps N] [--save path.bmp] [--wake]
 using SpawnDev.Reachy;
 
 var host = args.Length > 0 && !args[0].StartsWith("--") ? args[0] : "reachy-mini.local";
@@ -14,6 +15,15 @@ var seconds = Num("--seconds", 12);
 var fps = Num("--fps", 5);
 var savePath = Array.IndexOf(args, "--save") is var s and >= 0 && s + 1 < args.Length ? args[s + 1] : null;
 
+var wake = args.Contains("--wake");
+using var robot = new ReachyMiniClient(host);
+if (wake)
+{
+    await robot.SetMotorModeAsync(MotorMode.Enabled);
+    await robot.WakeUpAsync();
+    await Task.Delay(6000);   // the move is only queued when the call returns
+    Console.WriteLine("robot awake");
+}
 await using var link = new RoseAudioLink(host) { VideoMaxFramesPerSecond = fps };
 var frames = 0; var first = DateTime.MinValue; var last = DateTime.MinValue;
 SpawnDev.RTC.Video.RTCVideoFrame? keep = null;
@@ -49,4 +59,14 @@ if (savePath != null && keep is { } k)
     w.Write(40); w.Write(k.Width); w.Write(k.Height); w.Write((short)1); w.Write((short)24); w.Write(0); w.Write(pixels.Length); w.Write(2835); w.Write(2835); w.Write(0); w.Write(0);
     w.Write(pixels);
     Console.WriteLine($"saved {savePath}");
+}
+
+if (wake)
+{
+    await robot.GoHomeAsync(1.5);
+    await Task.Delay(2500);
+    await robot.GotoSleepAsync();
+    await Task.Delay(7000);
+    await robot.SetMotorModeAsync(MotorMode.Disabled);
+    Console.WriteLine("robot parked");
 }
