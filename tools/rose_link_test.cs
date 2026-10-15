@@ -59,7 +59,7 @@ string Link() => Run("sudo /sbin/iw dev wlan0 station dump | grep -E 'signal:|tx
 Console.WriteLine("robot's view of the link before:\n" + Link() + "\n");
 
 // PC -> robot
-Run("sudo pkill -f linktest_sink.py; rm -f /tmp/linktest.out /tmp/linktest_sink.py");
+Run("sudo pkill -f "[l]inktest_sink.py"; rm -f /tmp/linktest.out /tmp/linktest_sink.py");
 Run($"cat > /tmp/linktest_sink.py <<'PY'\n{RobotSink}\nPY\nnohup python3 /tmp/linktest_sink.py > /dev/null 2>&1 &");
 await Task.Delay(1000);
 long sent = 0;
@@ -75,7 +75,7 @@ var pcSeconds = clock.Elapsed.TotalSeconds;
 await Task.Delay(1500);
 var during = Run("sudo /sbin/iw dev wlan0 station dump | grep -E 'rx bitrate|signal:'").Replace("\t", " ").Trim();
 var got = Run("cat /tmp/linktest.out 2>/dev/null").Split(' ');
-Run("sudo pkill -f linktest_sink.py; rm -f /tmp/linktest.out /tmp/linktest_sink.py");
+Run("sudo pkill -f "[l]inktest_sink.py"; rm -f /tmp/linktest.out /tmp/linktest_sink.py");
 if (got.Length == 2)
 {
     var n = long.Parse(got[0]); var dt = double.Parse(got[1], System.Globalization.CultureInfo.InvariantCulture);
