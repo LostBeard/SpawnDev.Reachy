@@ -309,6 +309,16 @@ public class ReachyMiniClient : IDisposable, IReachyMotion, IReachyLifecycle
         r.EnsureSuccessStatusCode();
     }
 
+    /// <summary>
+    /// Drops the audio the robot has received over WebRTC and not yet played (an interruption: what is still in its buffer must not be heard). The daemon's own barge-in call
+    /// (<c>/api/media/clear_incoming_audio</c>, daemon 1.8.1).
+    /// </summary>
+    public async Task ClearIncomingAudioAsync(CancellationToken ct = default)
+    {
+        using var r = await _http.PostAsync("/api/media/clear_incoming_audio", null, ct);
+        r.EnsureSuccessStatusCode();
+    }
+
     /// <summary>Stops whatever is playing.</summary>
     public async Task StopSoundAsync(CancellationToken ct = default)
     {

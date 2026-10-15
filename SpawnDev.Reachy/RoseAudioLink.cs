@@ -26,6 +26,7 @@ public sealed class RoseAudioLink : IAsyncDisposable
     private GstSignallingClient? _signalling;
     private IRTCPeerConnection? _pc;
     private IRTCRtpTransceiver? _audioTransceiver;
+    private IRTCAudioSender? _pcmSender;
     private IRTCAudioReceiver? _micReceiver;
     private IRTCVideoReceiver? _videoReceiver;
     private CancellationTokenSource? _cts;
@@ -68,6 +69,15 @@ public sealed class RoseAudioLink : IAsyncDisposable
     /// the room while the robot's head is up: asleep, the camera looks into the shell and the picture is nearly black.
     /// </remarks>
     public event Action<RTCVideoFrame>? OnVideoFrame;
+
+    /// <summary>
+    /// Stream speech to the robot's speaker over this WebRTC session (<see cref="Speech"/>) instead of uploading files to the daemon. Set before <see cref="ConnectAsync"/>. Desktop only. Opus on the way
+    /// instead of WAV; no upload wait. When false the audio track is the plain sendrecv transceiver it always was.
+    /// </summary>
+    public bool StreamSpeech { get; set; }
+
+    /// <summary>The live speech stream to the robot's speaker (null unless <see cref="StreamSpeech"/> was set before connecting).</summary>
+    public RobotSpeechStreamer? Speech { get; private set; }
 
     /// <summary>The most camera pictures per second delivered through <see cref="OnVideoFrame"/> (every frame is still decoded). Default 5; set before <see cref="ConnectAsync"/>.</summary>
     public double VideoMaxFramesPerSecond { get; set; } = 5;
@@ -149,7 +159,14 @@ public sealed class RoseAudioLink : IAsyncDisposable
         }
         // Audio is sendrecv on the robot's offer; declare the same so the mic comes up AND the one session
         // carries a send path out to the robot's speaker (see SetSendTrackAsync).
-        _audioTransceiver = _pc.AddTransceiver("audio", new RTCRtpTransceiverInit { Direction = "sendrecv" });
+        if (StreamSpeech && !OperatingSystem.IsBrowser())
+        {
+            // The audio track is added with a PCM sender behind it, so speech can be streamed to the robot (see RobotSpeechStreamer); the transceiver this makes is the same sendrecv audio m-line.
+            _pcmSender = _pc.AddPcmAudioTrack(RobotSpeechStreamer.SampleRate, 1);
+            Speech = new RobotSpeechStreamer(_pcmSender);
+        }
+        else
+            _audioTransceiver = _pc.AddTransceiver("audio", new RTCRtpTransceiverInit { Direction = "sendrecv" });
 
         _pc.OnTrack += trackEvent =>
         {
@@ -344,6 +361,8 @@ public sealed class RoseAudioLink : IAsyncDisposable
         try { if (_pump is not null) await _pump; } catch { }
         _micReceiver?.Dispose();
         _videoReceiver?.Dispose();
+        Speech?.Dispose();
+        _pcmSender?.Dispose();
         _pc?.Close();
         _pc?.Dispose();
         if (_signalling is not null) await _signalling.DisposeAsync();
