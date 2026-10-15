@@ -23,8 +23,14 @@ public sealed class RobotSpeechStreamer : IDisposable
     /// <summary>The rate audio is pushed at: the WebRTC Opus rate.</summary>
     public const int SampleRate = 48000;
 
-    /// <summary>Samples in one 20 ms frame.</summary>
+    /// <summary>Samples per channel in one 20 ms frame.</summary>
     public const int FrameSamples = SampleRate / 50;
+
+    /// <summary>
+    /// Channels of the Opus format the connection negotiates. The WebRTC Opus format is 48 kHz STEREO, and the encoder reads exactly (20 ms x channels) interleaved samples per frame: mono pushed into it is
+    /// read as half as many stereo frames, so speech came out at twice the speed and an octave up ("a chipmunk", live 2026-10-15). The speech is mono; each sample goes to every channel.
+    /// </summary>
+    public int Channels { get; }
 
     private readonly IRTCAudioSender _sender;
     private readonly object _lock = new();
@@ -47,9 +53,12 @@ public sealed class RobotSpeechStreamer : IDisposable
     public TimeSpan PlayoutLatency { get; set; } = TimeSpan.FromMilliseconds(200);
 
     /// <param name="sender">Where frames go: the peer connection's audio sender (48 kHz mono).</param>
-    public RobotSpeechStreamer(IRTCAudioSender sender)
+    /// <param name="channels">Channels of the negotiated Opus format (2: WebRTC's).</param>
+    public RobotSpeechStreamer(IRTCAudioSender sender, int channels = 2)
     {
+        if (channels < 1) throw new ArgumentOutOfRangeException(nameof(channels));
         _sender = sender ?? throw new ArgumentNullException(nameof(sender));
+        Channels = channels;
         _thread = new Thread(Run) { IsBackground = true, Name = "robot speech pacing", Priority = ThreadPriority.AboveNormal };
         _thread.Start();
     }
@@ -88,7 +97,7 @@ public sealed class RobotSpeechStreamer : IDisposable
 
     private void Run()
     {
-        var silence = new short[FrameSamples];
+        var silence = new short[FrameSamples * Channels];
         // Windows' default timer tick is 15.6 ms: a 20 ms frame clock needs 1 ms.
         var raised = false;
         if (OperatingSystem.IsWindows()) { try { timeBeginPeriod(1); raised = true; } catch { } }
@@ -101,7 +110,7 @@ public sealed class RobotSpeechStreamer : IDisposable
                 var shouldHaveSent = clock.ElapsedMilliseconds / 20;
                 if (due >= shouldHaveSent + 1) { Thread.Sleep(1); continue; }   // at most one frame ahead
                 due++;
-                var frame = new short[FrameSamples];
+                var frame = new short[FrameSamples * Channels];
                 Segment? finished = null;
                 lock (_lock)
                 {
@@ -109,13 +118,14 @@ public sealed class RobotSpeechStreamer : IDisposable
                     {
                         var s = _queue.Peek();
                         var n = Math.Min(FrameSamples, s.Pcm.Length - s.Offset);
-                        Array.Copy(s.Pcm, s.Offset, frame, 0, n);
+                        for (var i = 0; i < n; i++)
+                            for (var c = 0; c < Channels; c++) frame[i * Channels + c] = s.Pcm[s.Offset + i];     // mono speech to every channel
                         s.Offset += n;
                         if (s.Offset >= s.Pcm.Length) { finished = s; _queue.Dequeue(); }
                     }
                     else frame = silence;
                 }
-                try { _sender.PushPcm(new AudioPcmFrame(frame, SampleRate, 1)); }
+                try { _sender.PushPcm(new AudioPcmFrame(frame, SampleRate, Channels)); }
                 catch { /* a frame the transport refuses is lost; the next one goes out */ }
                 FramesSent++;
                 finished?.Done.TrySetResult();

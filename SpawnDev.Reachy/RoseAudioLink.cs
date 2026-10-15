@@ -177,8 +177,8 @@ public sealed class RoseAudioLink : IAsyncDisposable
         if (StreamSpeech && !OperatingSystem.IsBrowser())
         {
             // The audio track is added with a PCM sender behind it, so speech can be streamed to the robot (see RobotSpeechStreamer); the transceiver this makes is the same sendrecv audio m-line.
-            _pcmSender = _pc.AddPcmAudioTrack(RobotSpeechStreamer.SampleRate, 1);
-            Speech = new RobotSpeechStreamer(_pcmSender);
+            _pcmSender = _pc.AddPcmAudioTrack(RobotSpeechStreamer.SampleRate, 2);
+            Speech = new RobotSpeechStreamer(_pcmSender, channels: 2);
         }
         else
             _audioTransceiver = _pc.AddTransceiver("audio", new RTCRtpTransceiverInit { Direction = "sendrecv" });
