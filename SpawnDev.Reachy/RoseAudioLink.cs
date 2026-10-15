@@ -97,6 +97,12 @@ public sealed class RoseAudioLink : IAsyncDisposable
     /// </remarks>
     public event Action<IRTCMediaStreamTrack>? OnVideoTrack;
 
+    /// <summary>The robot's control channel (audio upload and play, over the WebRTC session), once it has arrived. Null before that.</summary>
+    public RobotDataChannel? Data { get; private set; }
+
+    /// <summary>Raised when the robot's control channel arrives (it may not be open yet: check <see cref="RobotDataChannel.IsOpen"/>).</summary>
+    public event Action<RobotDataChannel>? OnDataChannel;
+
     /// <summary>The robot's camera track, once received. Null before that.</summary>
     public IRTCMediaStreamTrack? VideoTrack { get; private set; }
 
@@ -204,6 +210,15 @@ public sealed class RoseAudioLink : IAsyncDisposable
             // MediaStreamTrackProcessor over this same track, which is pure cost for a host that just
             // wants to play the audio.
             if (OnMicAudio is not null) StartPcmCapture();
+        };
+
+        // The robot opens its control channel to us; audio uploads and the daemon's other commands travel on it (see RobotDataChannel).
+        _pc.OnDataChannel += channel =>
+        {
+            Data = new RobotDataChannel(channel);
+            Log?.Invoke($"data channel '{channel.Label}' received");
+            try { OnDataChannel?.Invoke(Data); }
+            catch (Exception ex) { Log?.Invoke($"OnDataChannel handler threw: {ex.GetType().Name}: {ex.Message}"); }
         };
 
         _pc.OnConnectionStateChange += state => OnConnectionStateChanged?.Invoke(state);
