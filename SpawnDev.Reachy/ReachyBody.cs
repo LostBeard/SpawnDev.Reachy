@@ -122,11 +122,59 @@ public sealed class ReachyBody : IAsyncDisposable
         finally { _moving.Release(); }
     }
 
+    // ---- where the robot is facing --------------------------------------------
+
+    /// <summary>
+    /// The body yaw (radians, left positive) the robot rests at between gestures: where it turned to face someone. Every gesture is made around this heading, not around straight
+    /// ahead - otherwise the first nod after turning toward a speaker would swing the robot back to the front.
+    /// </summary>
+    public double FacingBodyYaw { get; private set; }
+
+    /// <summary>The head yaw (radians, left positive) the robot rests at between gestures: the part of a large turn the torso could not make.</summary>
+    public double FacingHeadYaw { get; private set; }
+
+    /// <summary>Total turn from straight ahead, radians (body plus head).</summary>
+    public double FacingYaw => FacingBodyYaw + FacingHeadYaw;
+
+    /// <summary>The most the head turns beyond the torso when a turn is larger than the torso can make, radians.</summary>
+    public const double HeadFacingMax = 0.5;
+
+    /// <summary>
+    /// Turns to face a direction given relative to where the robot points NOW (left positive), staying turned afterwards: the torso takes the turn up to <see cref="BodyYawMax"/> and the head
+    /// the rest. Unlike a gesture this is a decision (it matters that the robot ends up looking at the person), so it waits a moment for a gesture in progress rather than skipping.
+    /// </summary>
+    /// <param name="yawLeft">Radians to turn from the current heading: positive to the robot's left.</param>
+    public async Task TurnTowardAsync(double yawLeft, GestureStyle style, double duration = 0.9, CancellationToken ct = default)
+    {
+        if (!await _moving.WaitAsync(1500, ct)) { Log?.Invoke("busy, did not turn"); return; }
+        try
+        {
+            var limit = BodyYawMax + HeadFacingMax;
+            var total = Clamp(FacingYaw + yawLeft, -limit, limit);
+            var body = Clamp(total, -BodyYawMax, BodyYawMax);
+            var head = Clamp(total - body, -HeadFacingMax, HeadFacingMax);
+            if (Math.Abs(body - FacingBodyYaw) < 0.03 && Math.Abs(head - FacingHeadYaw) < 0.03) return;
+            Log?.Invoke($"turning to face {total * 180 / Math.PI:+0;-0;0} degrees (body {body * 180 / Math.PI:+0;-0;0}, head {head * 180 / Math.PI:+0;-0;0})");
+            FacingBodyYaw = body; FacingHeadYaw = head;
+            await RestAsync(style, ct, duration);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { Log?.Invoke($"turn failed: {ex.GetType().Name}: {ex.Message}"); }
+        finally { _moving.Release(); }
+    }
+
+    /// <summary>Turns back to straight ahead.</summary>
+    public Task RecentreAsync(GestureStyle style, double duration = 1.2, CancellationToken ct = default) => TurnTowardAsync(-FacingYaw, style, duration, ct);
+
+    /// <summary>A head pose around the current facing: whatever yaw a gesture asks for is added to where the robot is facing.</summary>
+    private XyzRpyPose Pose(double X = 0, double Y = 0, double Z = 0, double Roll = 0, double Pitch = 0, double Yaw = 0) =>
+        new(X, Y, Z, Roll, Pitch, Yaw + FacingHeadYaw);
+
     /// <summary>Where the robot sits between gestures: head up and attentive.</summary>
     private async Task RestAsync(GestureStyle c, CancellationToken ct, double duration = 0.5) =>
         await _robot.GotoAsync(
-            bodyYaw: 0,
-            headPose: new XyzRpyPose(Z: HeadLiftMax, Pitch: -0.05),
+            bodyYaw: FacingBodyYaw,
+            headPose: Pose(Z: HeadLiftMax, Pitch: -0.05),
             antennas: (Clamp(c.AntennaRest.Left, -AntennaMax, AntennaMax),
                        Clamp(c.AntennaRest.Right, -AntennaMax, AntennaMax)),
             duration: duration,
@@ -148,10 +196,10 @@ public sealed class ReachyBody : IAsyncDisposable
             case Gesture.Nod:
                 for (var i = 0; i < 2; i++)
                 {
-                    await _robot.GotoAsync(headPose: new XyzRpyPose(Z: lift, Pitch: Clamp(0.30 * s, 0, HeadPitchDownMax)),
+                    await _robot.GotoAsync(headPose: Pose(Z: lift, Pitch: Clamp(0.30 * s, 0, HeadPitchDownMax)),
                         duration: 0.22, interpolation: Snappy, ct: ct);
                     await Task.Delay(220, ct);
-                    await _robot.GotoAsync(headPose: new XyzRpyPose(Z: lift, Pitch: Clamp(-0.12 * s, HeadPitchUpMax, 0)),
+                    await _robot.GotoAsync(headPose: Pose(Z: lift, Pitch: Clamp(-0.12 * s, HeadPitchUpMax, 0)),
                         duration: 0.22, interpolation: Snappy, ct: ct);
                     await Task.Delay(220, ct);
                 }
@@ -160,10 +208,10 @@ public sealed class ReachyBody : IAsyncDisposable
             case Gesture.Shake:
                 for (var i = 0; i < 2; i++)
                 {
-                    await _robot.GotoAsync(headPose: new XyzRpyPose(Z: lift, Yaw: Clamp(0.35 * s, -HeadYawMax, HeadYawMax)),
+                    await _robot.GotoAsync(headPose: Pose(Z: lift, Yaw: Clamp(0.35 * s, -HeadYawMax, HeadYawMax)),
                         duration: 0.20, interpolation: Snappy, ct: ct);
                     await Task.Delay(200, ct);
-                    await _robot.GotoAsync(headPose: new XyzRpyPose(Z: lift, Yaw: Clamp(-0.35 * s, -HeadYawMax, HeadYawMax)),
+                    await _robot.GotoAsync(headPose: Pose(Z: lift, Yaw: Clamp(-0.35 * s, -HeadYawMax, HeadYawMax)),
                         duration: 0.20, interpolation: Snappy, ct: ct);
                     await Task.Delay(200, ct);
                 }
@@ -171,7 +219,7 @@ public sealed class ReachyBody : IAsyncDisposable
 
             case Gesture.Tilt:
                 await _robot.GotoAsync(
-                    headPose: new XyzRpyPose(Z: lift, Roll: Clamp(0.40 * s, -HeadRollMax, HeadRollMax)),
+                    headPose: Pose(Z: lift, Roll: Clamp(0.40 * s, -HeadRollMax, HeadRollMax)),
                     antennas: (Clamp(c.AntennaRest.Left + 0.3, -AntennaMax, AntennaMax), c.AntennaRest.Right),
                     duration: 0.45, interpolation: Snappy, ct: ct);
                 await Task.Delay(900, ct);
@@ -179,7 +227,7 @@ public sealed class ReachyBody : IAsyncDisposable
 
             case Gesture.Perk:
                 await _robot.GotoAsync(
-                    headPose: new XyzRpyPose(Z: lift, Pitch: Clamp(-0.18 * s, HeadPitchUpMax, 0)),
+                    headPose: Pose(Z: lift, Pitch: Clamp(-0.18 * s, HeadPitchUpMax, 0)),
                     antennas: (Clamp(1.2 * s, -AntennaMax, AntennaMax), Clamp(1.2 * s, -AntennaMax, AntennaMax)),
                     duration: 0.30, interpolation: Snappy, ct: ct);
                 await Task.Delay(700, ct);
@@ -200,21 +248,21 @@ public sealed class ReachyBody : IAsyncDisposable
 
             case Gesture.Droop:
                 await _robot.GotoAsync(
-                    headPose: new XyzRpyPose(Z: lift * 0.4, Pitch: Clamp(0.35 * s, 0, HeadPitchDownMax)),
+                    headPose: Pose(Z: lift * 0.4, Pitch: Clamp(0.35 * s, 0, HeadPitchDownMax)),
                     antennas: (Clamp(-1.1 * s, -AntennaMax, AntennaMax), Clamp(-1.1 * s, -AntennaMax, AntennaMax)),
                     duration: 0.8, interpolation: Interpolation.EaseInOut, ct: ct);
                 await Task.Delay(1100, ct);
                 break;
 
             case Gesture.LookDown:
-                await _robot.GotoAsync(headPose: new XyzRpyPose(Z: lift, Pitch: Clamp(0.45 * s, 0, HeadPitchDownMax)),
+                await _robot.GotoAsync(headPose: Pose(Z: lift, Pitch: Clamp(0.45 * s, 0, HeadPitchDownMax)),
                     duration: 0.5, interpolation: Interpolation.EaseInOut, ct: ct);
                 await Task.Delay(800, ct);
                 break;
 
             case Gesture.LookUp:
                 await _robot.GotoAsync(
-                    headPose: new XyzRpyPose(Z: lift, Pitch: Clamp(-0.35 * s, HeadPitchUpMax, 0)),
+                    headPose: Pose(Z: lift, Pitch: Clamp(-0.35 * s, HeadPitchUpMax, 0)),
                     antennas: (Clamp(1.6 * s, -AntennaMax, AntennaMax), Clamp(1.6 * s, -AntennaMax, AntennaMax)),
                     duration: 0.25, interpolation: Snappy, ct: ct);
                 await Task.Delay(800, ct);
@@ -223,7 +271,7 @@ public sealed class ReachyBody : IAsyncDisposable
             case Gesture.LeanIn:
                 // X is forward. Small values only - this axis has far less travel
                 // than the rotational ones.
-                await _robot.GotoAsync(headPose: new XyzRpyPose(X: 0.015 * s, Z: lift, Pitch: 0.12 * s),
+                await _robot.GotoAsync(headPose: Pose(X: 0.015 * s, Z: lift, Pitch: 0.12 * s),
                     duration: 0.5, interpolation: Interpolation.EaseInOut, ct: ct);
                 await Task.Delay(900, ct);
                 break;
@@ -234,8 +282,8 @@ public sealed class ReachyBody : IAsyncDisposable
                     // the daemon constrains the two to within about 65 degrees.
                     var yaw = Clamp(0.5 * s, -BodyYawMax, BodyYawMax);
                     await _robot.GotoAsync(
-                        bodyYaw: yaw,
-                        headPose: new XyzRpyPose(Z: lift, Yaw: Clamp(yaw * 0.5, -HeadYawMax, HeadYawMax)),
+                        bodyYaw: Clamp(FacingBodyYaw + yaw, -BodyYawMax, BodyYawMax),
+                        headPose: Pose(Z: lift, Yaw: Clamp(yaw * 0.5, -HeadYawMax, HeadYawMax)),
                         duration: 0.7, interpolation: Snappy, ct: ct);
                     await Task.Delay(1000, ct);
                 }
@@ -244,11 +292,11 @@ public sealed class ReachyBody : IAsyncDisposable
             case Gesture.Bounce:
                 for (var i = 0; i < 3; i++)
                 {
-                    await _robot.GotoAsync(headPose: new XyzRpyPose(Z: lift),
+                    await _robot.GotoAsync(headPose: Pose(Z: lift),
                         antennas: (Clamp(1.3 * s, -AntennaMax, AntennaMax), Clamp(1.3 * s, -AntennaMax, AntennaMax)),
                         duration: 0.14, interpolation: Snappy, ct: ct);
                     await Task.Delay(150, ct);
-                    await _robot.GotoAsync(headPose: new XyzRpyPose(Z: lift * 0.25),
+                    await _robot.GotoAsync(headPose: Pose(Z: lift * 0.25),
                         antennas: (Clamp(0.4 * s, -AntennaMax, AntennaMax), Clamp(0.4 * s, -AntennaMax, AntennaMax)),
                         duration: 0.14, interpolation: Snappy, ct: ct);
                     await Task.Delay(150, ct);
@@ -260,10 +308,10 @@ public sealed class ReachyBody : IAsyncDisposable
                     // Not a full rotation - the torso cannot do one. Swing to each
                     // side and back, which reads as the same excitement.
                     var yaw = Clamp(0.65 * s, -BodyYawMax, BodyYawMax);
-                    await _robot.GotoAsync(bodyYaw: yaw, headPose: new XyzRpyPose(Z: lift, Yaw: yaw * 0.6),
+                    await _robot.GotoAsync(bodyYaw: Clamp(FacingBodyYaw + yaw, -BodyYawMax, BodyYawMax), headPose: Pose(Z: lift, Yaw: yaw * 0.6),
                         duration: 0.45, interpolation: Snappy, ct: ct);
                     await Task.Delay(480, ct);
-                    await _robot.GotoAsync(bodyYaw: -yaw, headPose: new XyzRpyPose(Z: lift, Yaw: -yaw * 0.6),
+                    await _robot.GotoAsync(bodyYaw: Clamp(FacingBodyYaw - yaw, -BodyYawMax, BodyYawMax), headPose: Pose(Z: lift, Yaw: -yaw * 0.6),
                         duration: 0.6, interpolation: Snappy, ct: ct);
                     await Task.Delay(620, ct);
                 }
