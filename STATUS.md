@@ -277,7 +277,7 @@ real voice actors.
 
 ## Dead ends - do not re-run
 
-- **UPDATE 2026-10-15 (Data): DOA is NOT proven dead; the high-level endpoint was the problem.** On daemon 1.10.0 `/api/state/doa` returned `null` ("audio not initialized") while the chip itself answered every
+- **UPDATE 2026-10-15 (Data): DOA is NOT proven dead.** `/api/state/doa` reads LAZILY: the first request starts a reader and returns `null`; only a client that keeps polling (every ~100-500 ms) gets values (daemon source: "the first one lands within ~100 ms of the first request"). A sparse probe sees `null` every time. The chip itself also answered every
   parameter read (`/api/audio/config/parameter/{name}`): `DOA_VALUE_RADIANS`, `AEC_AZIMUTH_VALUES` (4 beams: 2 focused, free-running, auto-select), `AEC_SPENERGY_VALUES` (per-beam speech energy; >0 = speech).
   Array is LINEAR (`AEC_MIC_ARRAY_GEO`: mics at x = -50, -17, +17, +50 mm): angles are 0..pi, 0 = left, pi/2 = ahead OR behind, pi = right. Official DoA needs audio firmware >= 2.1.0; this robot has 2.1.2 (latest 2.1.4); daemon 1.10.0 (latest 1.11.0).
   "90 deg for front AND left" = the front reading was right and the left one was a stale/idle value. Re-test with `Vertex/tools/ReachyDoa` (read-only), not by turning the head to it. Sources: HF reachy_mini docs (sound_doa example, troubleshooting), XMOS XVF3800 control command appendix.
